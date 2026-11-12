@@ -55,9 +55,11 @@ The icon under the pointer lifts a little and shows its name.
 
 Open it from the bar's **Overview** icon, **Quick Settings → Overview**, or with `shoji-bar-4 msg toggle overview [OUTPUT]`. The bar icon appears when Niri is available and uses the accent color while the overview is open.
 
-- Each output shows its own workspaces in a compact, scrollable canvas. Niri's tiled columns and rows keep their relative proportions and tile sizes; floating windows use their compositor-reported positions and sizes.
-- Tiled positions are reconstructed from column/row indices because Niri's IPC does not expose their current viewport coordinates.
-- Application icons and titles identify windows. The active workspace, focused window, urgent windows and current viewport are distinguished with the shell's colors.
+- Each output shows its workspaces as equal-sized, abstract screen viewports, in index order. A compact two-column layout becomes one column when space is limited; taller lists scroll.
+- All windows on an output share one scale. Windows are clipped at the viewport edges; fully offscreen windows are not drawn or clickable. Empty workspaces retain an empty screen at the same scale. The heading counts all windows assigned to the workspace, including those outside the viewport.
+- Scroll over a workspace viewport to browse its windows horizontally (vertical wheel or horizontal touchpad input). Each workspace remembers its own browsing offset while the panel is open; this does not change Niri's workspace or focus. Viewport scrolling stops at the content edges without scrolling the surrounding list; scroll outside a viewport to browse the workspace list.
+- Tiled positions and the viewport offset are still estimated from column/row indices and the active window because Niri's IPC does not expose their current viewport coordinates. This is not an exact reconstruction of scrolling or stacking. Floating windows use their compositor-reported positions and sizes.
+- Application icons and titles identify windows. Active windows and the active workspace use tinted backgrounds and accent outlines, without text badges. Urgent windows and workspaces retain error-colored outlines. Workspace cards have room around their previews; viewport corner radii are derived from the card radius, padding and border thickness to keep the nested curves concentric.
 - Click a window to focus it, or a workspace heading to show that workspace; the overview closes. Escape, the close button or a click outside also closes it.
 - Requires niri's IPC. It uses AntiWebUI directly, without Noctalia, Luau, `grim` or screenshots.
 

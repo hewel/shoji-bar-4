@@ -1,4 +1,4 @@
-//! A workspace overview for niri: each output's workspaces as live ribbons of their windows.
+//! A workspace overview for niri: uniformly scaled, abstract workspace viewports.
 //!
 //! The geometry comes from niri's event stream. The UI owns no compositor state of its own beyond
 //! the layout details that AntiWebUI's general window model does not retain.
@@ -14,8 +14,15 @@ use serde_json::{Value, json};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 const GAP: f32 = 6.0;
-const CARD_PAD: f32 = 14.0;
+const CARD_PAD: f32 = 18.0;
 const GRID_GAP: f32 = 16.0;
+const PANEL_PAD: f32 = 18.0;
+const SCROLLBAR: f32 = 6.0;
+const TARGET_VIEWPORT_WIDTH: f32 = 280.0;
+const CARD_BORDER: f32 = 1.5;
+const CARD_RADIUS: f32 = 24.0;
+// Match the nested curves at the card's padded edges.
+const VIEWPORT_RADIUS: f32 = CARD_RADIUS - CARD_PAD - CARD_BORDER;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Layout {
@@ -33,7 +40,6 @@ struct Tile {
     y: f32,
     width: f32,
     height: f32,
-    visible: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -41,8 +47,6 @@ struct Ribbon {
     workspace: Workspace,
     tiles: Vec<Tile>,
     window_count: usize,
-    width: f32,
-    height: f32,
     viewport_x: f32,
     viewport_width: f32,
     viewport_height: f32,
@@ -179,7 +183,6 @@ fn ribbons(
 
         let mut tiles = Vec::new();
         let mut x = 0.0;
-        let mut ribbon_h: f32 = 0.0;
         for entries in columns.values_mut() {
             entries.sort_by_key(|(_, layout)| layout.row);
             let column_w = entries
@@ -194,22 +197,15 @@ fn ribbons(
                     y,
                     width: layout.width,
                     height: layout.height,
-                    visible: false,
                 });
                 y += layout.height + GAP;
             }
-            ribbon_h = ribbon_h.max((y - GAP).max(0.0));
             x += column_w + GAP;
         }
         let ribbon_w = if tiles.is_empty() {
             screen_w
         } else {
             (x - GAP).max(screen_w)
-        };
-        let ribbon_h = if tiles.is_empty() {
-            screen_h
-        } else {
-            ribbon_h.max(screen_h)
         };
         let focus = tiles.iter().position(|tile| {
             tile.window.is_focused || Some(tile.window.id) == workspace.active_window_id
@@ -236,18 +232,12 @@ fn ribbons(
                 y,
                 width: layout.width,
                 height: layout.height,
-                visible: false,
             });
-        }
-        for tile in &mut tiles {
-            tile.visible = tile.x + tile.width > viewport_x && tile.x < viewport_x + screen_w;
         }
         result.push(Ribbon {
             workspace: workspace.clone(),
             tiles,
             window_count,
-            width: ribbon_w,
-            height: ribbon_h,
             viewport_x,
             viewport_width: screen_w,
             viewport_height: screen_h,
@@ -273,6 +263,57 @@ pub fn summary() -> String {
             "workspaces"
         }
     )
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct PanelGeometry {
+    scale: f32,
+    width: f32,
+    columns: usize,
+}
+
+fn card_width(ribbon: &Ribbon, scale: f32) -> f32 {
+    ribbon.viewport_width * scale + (CARD_PAD + CARD_BORDER) * 2.0
+}
+
+fn panel_geometry(ribbons: &[Ribbon], max_width: f32) -> PanelGeometry {
+    if ribbons.is_empty() {
+        return PanelGeometry {
+            scale: 0.0,
+            width: max_width.min(360.0),
+            columns: 1,
+        };
+    }
+    let viewport_width = ribbons
+        .iter()
+        .map(|ribbon| ribbon.viewport_width)
+        .fold(1.0, f32::max);
+    let content_limit = max_width - PANEL_PAD * 2.0 - SCROLLBAR;
+    let scale =
+        TARGET_VIEWPORT_WIDTH.min(content_limit - (CARD_PAD + CARD_BORDER) * 2.0) / viewport_width;
+    let width = viewport_width * scale + (CARD_PAD + CARD_BORDER) * 2.0;
+    let columns = ((content_limit + GRID_GAP) / (width + GRID_GAP))
+        .floor()
+        .max(1.0)
+        .min(2.0)
+        .min(ribbons.len() as f32);
+    PanelGeometry {
+        scale,
+        width: columns * width + (columns - 1.0) * GRID_GAP + PANEL_PAD * 2.0 + SCROLLBAR,
+        columns: columns as usize,
+    }
+}
+
+// Clip both drawing and hit targets to the viewport, without rescaling partial windows.
+fn viewport_tile(mut tile: Tile, viewport_x: f32, size: (f32, f32)) -> Option<Tile> {
+    let x = tile.x - viewport_x;
+    let right = (x + tile.width).min(size.0);
+    let bottom = (tile.y + tile.height).min(size.1);
+    tile.x = x.max(0.0);
+    tile.y = tile.y.max(0.0);
+    tile.width = right - tile.x;
+    tile.height = bottom - tile.y;
+    (tile.width > 0.0 && tile.height > 0.0).then_some(tile)
 }
 
 pub fn panel(output: Output) -> Div {
@@ -304,35 +345,32 @@ pub fn panel(output: Output) -> Div {
             size,
         )
     });
-    let panel_w = (size.0 - 48.0).max(280.0).min(1120.0);
+    // Browsing belongs to this panel, not the compositor. Keep it across live card rebuilds.
+    let browse_offsets = signal(HashMap::<u64, f32>::new());
+    let max_panel_w = (size.0 - 48.0).max(280.0).min(1120.0);
     let panel_h = (size.1 - 48.0).max(320.0).min(780.0);
-    let columns = if panel_w >= 960.0 { 2.0 } else { 1.0 };
-    let card_w = (panel_w - 42.0 - (columns - 1.0) * GRID_GAP) / columns;
-    let workspace_ids = memo({
+    let geometry = memo({
         let ribbons = ribbons.clone();
-        move || {
-            ribbons
-                .get()
-                .iter()
-                .map(|ribbon| ribbon.workspace.id)
-                .collect::<Vec<_>>()
-        }
+        move || panel_geometry(&ribbons.get(), max_panel_w)
     });
     div()
-        .w(panel_w)
         .max_h(panel_h)
+        .flex_none()
         .flex()
         .flex_col()
         .gap(16.0_f32)
-        .p(18.0_f32)
+        .p(PANEL_PAD)
         .rounded(30.0_f32)
         .shadows(elevation(3))
-        .dyn_style(|s| {
+        .dyn_style(move |s| {
             let c = colors();
-            s.bg(c.surface_container).text_color(c.on_surface)
+            s.w(geometry.get().width)
+                .bg(c.surface_container)
+                .text_color(c.on_surface)
         })
         .child(
             div()
+                .w_full()
                 .flex()
                 .flex_row()
                 .items_center()
@@ -355,38 +393,23 @@ pub fn panel(output: Output) -> Div {
                 ),
         )
         .child(show(available, move || {
-            div().flex_1().min_h(0.0).overflow_y_scroll().child(
-                div()
-                    .w_full()
-                    .flex()
-                    .flex_row()
-                    .flex_wrap()
-                    .content_start()
-                    .gap(GRID_GAP)
-                    .pr(6.0_f32)
-                    .child(
-                        for_each(
-                            move || workspace_ids.get(),
-                            |id| *id,
-                            move |id| {
-                                let ribbon = memo({
-                                    let ribbons = ribbons.clone();
-                                    move || {
-                                        ribbons
-                                            .get()
-                                            .into_iter()
-                                            .find(|ribbon| ribbon.workspace.id == id)
-                                    }
-                                });
-                                dyn_view(move || match ribbon.get() {
-                                    Some(ribbon) => workspace_card(ribbon, card_w).into_view(),
-                                    None => div().into_view(),
-                                })
-                            },
-                        )
-                        .moves(emphasized(240)),
-                    ),
-            )
+            div()
+                .flex_1()
+                .min_h(0.0)
+                .overflow_y_scroll()
+                .child(dyn_view(move || {
+                    let geometry = geometry.get();
+                    let mut workspaces = ribbons.get().into_iter().peekable();
+                    let mut rows = div().flex().flex_col().gap(GRID_GAP).pr(SCROLLBAR);
+                    while workspaces.peek().is_some() {
+                        let mut row = div().flex().flex_row().gap(GRID_GAP);
+                        for ribbon in workspaces.by_ref().take(geometry.columns) {
+                            row = row.child(workspace_card(ribbon, geometry.scale, browse_offsets));
+                        }
+                        rows = rows.child(row);
+                    }
+                    rows
+                }))
         }))
         .child(show(
             || !available(),
@@ -408,7 +431,8 @@ pub fn panel(output: Output) -> Div {
         ))
 }
 
-fn workspace_card(ribbon: Ribbon, width: f32) -> Div {
+fn workspace_card(ribbon: Ribbon, scale: f32, browse_offsets: Signal<HashMap<u64, f32>>) -> Div {
+    let width = card_width(&ribbon, scale);
     let workspace = ribbon.workspace.clone();
     let title = workspace
         .name
@@ -423,48 +447,7 @@ fn workspace_card(ribbon: Ribbon, width: f32) -> Div {
         ribbon.window_count,
         if ribbon.window_count == 1 { "" } else { "s" }
     );
-    let canvas_w = width - CARD_PAD * 2.0;
-    let canvas_h =
-        (canvas_w * ribbon.viewport_height / ribbon.viewport_width.max(1.0)).clamp(112.0, 184.0);
-    let scale = (canvas_w / ribbon.width.max(1.0)).min(canvas_h / ribbon.height.max(1.0));
-    let offset_x = (canvas_w - ribbon.width * scale) / 2.0;
-    let offset_y = (canvas_h - ribbon.height * scale) / 2.0;
-    let mut canvas = div()
-        .relative()
-        .w(canvas_w)
-        .h(canvas_h)
-        .rounded(16.0_f32)
-        .overflow_hidden()
-        .dyn_style(|s| s.bg(colors().surface_container_lowest));
-    for tile in ribbon.tiles.clone() {
-        canvas = canvas.child(window_tile(tile, scale, offset_x, offset_y));
-    }
-    canvas = canvas.child(
-        div()
-            .absolute()
-            .ml(offset_x + ribbon.viewport_x * scale)
-            .mt(offset_y)
-            .w(ribbon.viewport_width * scale)
-            .h((ribbon.viewport_height * scale).min(canvas_h))
-            .rounded(12.0_f32)
-            .border(1.5_f32)
-            .pointer_events_none()
-            .dyn_style(|s| s.border_color(colors().primary.with_alpha(0.75))),
-    );
-    if ribbon.tiles.is_empty() {
-        canvas = canvas.child(
-            div()
-                .absolute()
-                .inset(0.0)
-                .flex()
-                .items_center()
-                .justify_center()
-                .child(
-                    static_txt(TextStyle::BODY_SMALL, "Empty workspace")
-                        .dyn_style(|s| s.text_color(colors().on_surface_variant)),
-                ),
-        );
-    }
+    let canvas = workspace_canvas(ribbon, scale, browse_offsets);
     div()
         .w(width)
         .flex_none()
@@ -472,8 +455,8 @@ fn workspace_card(ribbon: Ribbon, width: f32) -> Div {
         .flex_col()
         .gap(10.0_f32)
         .p(CARD_PAD)
-        .rounded(24.0_f32)
-        .border(if active { 1.5_f32 } else { 0.0_f32 })
+        .rounded(CARD_RADIUS)
+        .border(CARD_BORDER)
         .dyn_style(move |s| {
             let c = colors();
             s.bg(if active {
@@ -481,7 +464,11 @@ fn workspace_card(ribbon: Ribbon, width: f32) -> Div {
             } else {
                 c.surface_container_high
             })
-            .border_color(if urgent { c.error } else { c.primary })
+            .border_color(if urgent {
+                c.error
+            } else {
+                c.primary.with_alpha(if active { 1.0 } else { 0.0 })
+            })
         })
         .child(pressable(
             div()
@@ -500,13 +487,82 @@ fn workspace_card(ribbon: Ribbon, width: f32) -> Div {
         .child(canvas)
 }
 
-fn window_tile(tile: Tile, scale: f32, offset_x: f32, offset_y: f32) -> Div {
+fn workspace_canvas(ribbon: Ribbon, scale: f32, browse_offsets: Signal<HashMap<u64, f32>>) -> Div {
+    let id = ribbon.workspace.id;
+    let size = (ribbon.viewport_width, ribbon.viewport_height);
+    let min_x = ribbon.tiles.iter().map(|tile| tile.x).fold(0.0, f32::min);
+    let max_x = (ribbon
+        .tiles
+        .iter()
+        .map(|tile| tile.x + tile.width)
+        .fold(size.0, f32::max)
+        - size.0)
+        .max(min_x);
+    let viewport_x = memo(move || {
+        browse_offsets.with(|offsets| {
+            offsets
+                .get(&id)
+                .copied()
+                .unwrap_or(ribbon.viewport_x)
+                .clamp(min_x, max_x)
+        })
+    });
+    div()
+        .relative()
+        .w(size.0 * scale)
+        .h(size.1 * scale)
+        .rounded(VIEWPORT_RADIUS)
+        .overflow_hidden()
+        .dyn_style(|s| s.bg(colors().surface_container_lowest))
+        .on_scroll(move |event| {
+            let delta = if event.delta_x.abs() > event.delta_y.abs() {
+                event.delta_x
+            } else {
+                event.delta_y
+            };
+            let current = untrack(|| viewport_x.get());
+            let next = (current + delta / scale).clamp(min_x, max_x);
+            if next != current {
+                browse_offsets.update(|offsets| {
+                    offsets.insert(id, next);
+                });
+            }
+            // Do not scroll the surrounding workspace list, even at a ribbon's boundary.
+            event.stop_propagation();
+        })
+        .child(dyn_view(move || {
+            let x = viewport_x.get();
+            let mut content = div().size_full().relative();
+            for tile in &ribbon.tiles {
+                if let Some(tile) = viewport_tile(tile.clone(), x, size) {
+                    let active = tile.window.is_focused
+                        || Some(tile.window.id) == ribbon.workspace.active_window_id;
+                    content = content.child(window_tile(tile, scale, active));
+                }
+            }
+            if ribbon.window_count == 0 {
+                content = content.child(
+                    div()
+                        .absolute()
+                        .inset(0.0)
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(
+                            static_txt(TextStyle::BODY_SMALL, "Empty workspace")
+                                .dyn_style(|s| s.text_color(colors().on_surface_variant)),
+                        ),
+                );
+            }
+            content
+        }))
+}
+
+fn window_tile(tile: Tile, scale: f32, active: bool) -> Div {
     let id = tile.window.id;
-    let focused = tile.window.is_focused;
     let urgent = tile.window.is_urgent;
-    let visible = tile.visible;
-    let w = (tile.width * scale - 1.0).max(2.0);
-    let h = (tile.height * scale - 1.0).max(2.0);
+    let w = tile.width * scale;
+    let h = tile.height * scale;
     let title = tile.window.title.clone();
     let mut content = div()
         .size_full()
@@ -529,26 +585,31 @@ fn window_tile(tile: Tile, scale: f32, offset_x: f32, offset_y: f32) -> Div {
     pressable(
         div()
             .absolute()
-            .ml(offset_x + tile.x * scale)
-            .mt(offset_y + tile.y * scale)
+            .left(tile.x * scale)
+            .top(tile.y * scale)
             .w(w)
             .h(h)
-            .rounded(10.0_f32)
-            .border(if focused || urgent { 1.5_f32 } else { 0.0_f32 })
+            .rounded(VIEWPORT_RADIUS)
+            .overflow_hidden()
+            .border(if active || urgent { CARD_BORDER } else { 0.0_f32 })
             .child(content)
             .dyn_style(move |s| {
                 let c = colors();
-                s.bg(if focused {
+                s.bg(if active {
                     c.primary_container
                 } else if urgent {
                     c.error_container
-                } else if visible {
-                    c.secondary_container
                 } else {
-                    c.surface_container_high
+                    c.secondary_container
                 })
                 .border_color(if urgent { c.error } else { c.primary })
-                .opacity(if visible || focused { 1.0_f32 } else { 0.5_f32 })
+                .text_color(if active {
+                    c.on_primary_container
+                } else if urgent {
+                    c.on_error_container
+                } else {
+                    c.on_secondary_container
+                })
             })
             .on_click(move |_| focus_window(id)),
         |c| c.on_surface,
@@ -608,6 +669,103 @@ mod tests {
         }
     }
 
+    fn empty_ribbon(idx: u64) -> Ribbon {
+        Ribbon {
+            workspace: workspace(idx, "DP-1"),
+            tiles: Vec::new(),
+            window_count: 0,
+            viewport_x: 0.0,
+            viewport_width: 1600.0,
+            viewport_height: 900.0,
+        }
+    }
+
+    #[test]
+    fn wheel_browsing_is_local_bounded_and_survives_card_rebuilds() {
+        use anti_webui::core::{
+            Ui,
+            event::{Modifiers, ScrollPhase, ScrollSource, WindowEvent},
+            geometry::{PointF, Scale, SizeI},
+        };
+        use std::{cell::Cell, rc::Rc};
+
+        let slots = Cell::new(None);
+        let bubbled = Rc::new(Cell::new(0));
+        let outer_events = bubbled.clone();
+        let mut first = empty_ribbon(1);
+        first.viewport_x = 200.0;
+        first.window_count = 2;
+        first.tiles = vec![
+            Tile {
+                window: window(1, 1, false),
+                x: 0.0,
+                y: 0.0,
+                width: 1600.0,
+                height: 900.0,
+            },
+            Tile {
+                window: window(2, 1, false),
+                x: 1606.0,
+                y: 0.0,
+                width: 1600.0,
+                height: 900.0,
+            },
+        ];
+        let mut ui = Ui::new(|| {
+            let offsets = signal(HashMap::new());
+            let model = signal(first);
+            slots.set(Some((offsets, model)));
+            div()
+                .w(500.0)
+                .h(300.0)
+                .on_scroll(move |_| outer_events.set(outer_events.get() + 1))
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .gap(8.0_f32)
+                        .child(dyn_view(move || {
+                            workspace_canvas(model.get(), 0.125, offsets)
+                        }))
+                        .child(workspace_canvas(empty_ribbon(2), 0.125, offsets)),
+                )
+        });
+        ui.handle_event(WindowEvent::Resized {
+            size: SizeI::new(500, 300),
+            scale: Scale::from_f64(1.0),
+        });
+        ui.update();
+        let (offsets, model) = slots.get().unwrap();
+        let scroll = |ui: &mut Ui, x: f32, y: f32, dx: f32, dy: f32| {
+            ui.handle_event(WindowEvent::Scroll {
+                position: PointF::new(x, y),
+                delta_x: dx,
+                delta_y: dy,
+                modifiers: Modifiers::default(),
+                source: ScrollSource::Unknown,
+                phase: ScrollPhase::Single,
+                time: 0,
+            });
+            ui.update();
+        };
+        scroll(&mut ui, 50.0, 50.0, 0.0, 20.0);
+        let browsed = offsets.with(|offsets| offsets[&1]);
+        assert!(browsed > 200.0 && browsed < 1606.0);
+        assert!(!offsets.with(|offsets| offsets.contains_key(&2)));
+        model.update(|ribbon| ribbon.tiles[0].window.title = "Updated".into());
+        ui.update();
+        scroll(&mut ui, 50.0, 50.0, 20.0, 0.0);
+        assert!(offsets.with(|offsets| offsets[&1]) > browsed);
+        scroll(&mut ui, 50.0, 50.0, 0.0, 10000.0);
+        assert_eq!(offsets.with(|offsets| offsets[&1]), 1606.0);
+        scroll(&mut ui, 50.0, 50.0, 0.0, -10000.0);
+        assert_eq!(offsets.with(|offsets| offsets[&1]), 0.0);
+        scroll(&mut ui, 250.0, 50.0, 0.0, 20.0);
+        assert_eq!(bubbled.get(), 0);
+        scroll(&mut ui, 450.0, 250.0, 0.0, 20.0);
+        assert_eq!(bubbled.get(), 1);
+    }
+
     #[test]
     fn workspaces_are_ordered_by_index_not_niri_event_order() {
         let result = ribbons(
@@ -628,6 +786,73 @@ mod tests {
                 .collect::<Vec<_>>(),
             [1, 3, 4]
         );
+    }
+
+    #[test]
+    fn viewport_scale_and_panel_size_do_not_depend_on_offscreen_windows() {
+        let pair = [empty_ribbon(1), empty_ribbon(2)];
+        let before = panel_geometry(&pair, 1120.0);
+        let mut populated = pair.clone();
+        populated[0].tiles.push(Tile {
+            window: window(1, 1, false),
+            x: 12000.0,
+            y: 0.0,
+            width: 8000.0,
+            height: 4000.0,
+        });
+        assert_eq!(panel_geometry(&populated, 1120.0), before);
+        assert_eq!(
+            card_width(&pair[0], before.scale),
+            card_width(&populated[0], before.scale)
+        );
+        let narrow = panel_geometry(&populated, 280.0);
+        assert!(narrow.width <= 280.0);
+        assert!(narrow.scale > 0.0 && narrow.scale < before.scale);
+    }
+
+    #[test]
+    fn viewport_clips_partial_windows_and_excludes_outside_hit_targets() {
+        let tile = Tile {
+            window: window(1, 1, true),
+            x: 150.0,
+            y: -50.0,
+            width: 400.0,
+            height: 300.0,
+        };
+        let clipped = viewport_tile(tile.clone(), 200.0, (1600.0, 900.0)).unwrap();
+        assert_eq!(
+            (clipped.x, clipped.y, clipped.width, clipped.height),
+            (0.0, 0.0, 350.0, 250.0)
+        );
+        let bottom_right = Tile {
+            x: 1700.0,
+            y: 800.0,
+            ..tile.clone()
+        };
+        let clipped = viewport_tile(bottom_right, 200.0, (1600.0, 900.0)).unwrap();
+        assert_eq!(
+            (clipped.x, clipped.y, clipped.width, clipped.height),
+            (1500.0, 800.0, 100.0, 100.0)
+        );
+        for (x, y) in [
+            (-200.0, 0.0),
+            (1800.0, 0.0),
+            (200.0, -300.0),
+            (200.0, 900.0),
+        ] {
+            assert!(
+                viewport_tile(
+                    Tile {
+                        x,
+                        y,
+                        ..tile.clone()
+                    },
+                    200.0,
+                    (1600.0, 900.0)
+                )
+                .is_none()
+            );
+        }
     }
 
     #[test]
@@ -704,12 +929,7 @@ mod tests {
                 (4, 326.0, 80.0, 400.0),
             ]
         );
-        assert_eq!((ribbon.width, ribbon.height), (1806.0, 1806.0));
         assert_eq!(ribbon.viewport_x, 206.0);
-        assert_eq!(
-            ribbon.tiles.iter().map(|t| t.visible).collect::<Vec<_>>(),
-            [true, true, true, true]
-        );
     }
 
     #[test]
