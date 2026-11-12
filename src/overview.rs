@@ -10,9 +10,11 @@ use anti_webui::prelude::*;
 use anti_webui::shell::niri::{self, Window};
 use anti_webui::shell::prelude::*;
 use anti_webui_md3e::icons;
-use serde_json::{Value, json};
-use std::collections::{HashMap, HashSet};
+use serde_json::json;
 use std::rc::Rc;
+
+mod layouts;
+use layouts::LayoutCache;
 
 mod viewport;
 use viewport::{BrowseState, VisibleWindow, WorkspaceViewport};
@@ -26,115 +28,6 @@ const CARD_BORDER: f32 = 1.5;
 const CARD_RADIUS: f32 = 24.0;
 // Match the nested curves at the card's padded edges.
 const VIEWPORT_RADIUS: f32 = CARD_RADIUS - CARD_PAD - CARD_BORDER;
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct Layout {
-    column: usize,
-    row: usize,
-    width: f32,
-    height: f32,
-    view_position: Option<(f32, f32)>,
-}
-
-fn layout_of(window: &Value) -> Option<Layout> {
-    let layout = window.get("layout").unwrap_or(window);
-    let position = layout
-        .get("pos_in_scrolling_layout")
-        .and_then(Value::as_array);
-    let view_position = layout
-        .get("tile_pos_in_workspace_view")
-        .and_then(Value::as_array);
-    let size = layout.get("tile_size")?.as_array()?;
-    let (column, row) = match position {
-        Some(position) => (
-            position.first()?.as_u64()? as usize,
-            position.get(1)?.as_u64()? as usize,
-        ),
-        None => (0, 0),
-    };
-    let view_position = match view_position {
-        Some(position) => Some((
-            position.first()?.as_f64()? as f32,
-            position.get(1)?.as_f64()? as f32,
-        )),
-        None => None,
-    };
-    let layout = Layout {
-        column,
-        row,
-        width: size.first()?.as_f64()? as f32,
-        height: size.get(1)?.as_f64()? as f32,
-        view_position,
-    };
-    (layout.width > 0.0
-        && layout.height > 0.0
-        && ((column > 0 && row > 0) || view_position.is_some()))
-    .then_some(layout)
-}
-
-fn layouts_of(windows: &[Value]) -> HashMap<u64, Layout> {
-    windows
-        .iter()
-        .filter_map(|window| Some((window.get("id")?.as_u64()?, layout_of(window)?)))
-        .collect()
-}
-
-fn merge_initial_layouts(
-    current: &mut HashMap<u64, Layout>,
-    initial: HashMap<u64, Layout>,
-    live: &HashSet<u64>,
-) {
-    current.retain(|id, _| live.contains(id));
-    for (id, layout) in initial {
-        if live.contains(&id) {
-            // An event received after the request is newer than the response.
-            current.entry(id).or_insert(layout);
-        }
-    }
-}
-
-fn apply_layout_event(layouts: &mut HashMap<u64, Layout>, event: &Value) {
-    if let Some(windows) = event
-        .get("WindowsChanged")
-        .and_then(|e| e.get("windows"))
-        .and_then(Value::as_array)
-    {
-        *layouts = layouts_of(windows);
-    } else if let Some(window) = event
-        .get("WindowOpenedOrChanged")
-        .and_then(|e| e.get("window"))
-    {
-        let Some(id) = window.get("id").and_then(Value::as_u64) else {
-            return;
-        };
-        match layout_of(window) {
-            Some(layout) => layouts.insert(id, layout),
-            None => layouts.remove(&id),
-        };
-    } else if let Some(changes) = event
-        .get("WindowLayoutsChanged")
-        .and_then(|e| e.get("changes"))
-        .and_then(Value::as_array)
-    {
-        for change in changes {
-            let Some(pair) = change.as_array() else {
-                continue;
-            };
-            let Some(id) = pair.first().and_then(Value::as_u64) else {
-                continue;
-            };
-            if let Some(layout) = pair.get(1).and_then(layout_of) {
-                layouts.insert(id, layout);
-            }
-        }
-    } else if let Some(id) = event
-        .get("WindowClosed")
-        .and_then(|e| e.get("id"))
-        .and_then(Value::as_u64)
-    {
-        layouts.remove(&id);
-    }
-}
 
 pub fn available() -> bool {
     niri::available()
@@ -199,28 +92,26 @@ pub fn panel(output: Output) -> Div {
         output.logical_size.width.max(1) as f32,
         output.logical_size.height.max(1) as f32,
     );
-    let layouts = signal(HashMap::new());
+    let layouts = signal(LayoutCache::default());
     niri::on_event(move |event| {
-        layouts.update(|layouts| apply_layout_event(layouts, event));
+        layouts.update(|cache| cache.apply_event(event));
     });
     // The shared tracker may have consumed the initial WindowsChanged before this panel opened.
     niri::request(json!("Windows")).then(move |result| {
-        if let Ok(value) = result
-            && let Some(windows) = value.get("Windows").and_then(Value::as_array)
-        {
-            let initial = layouts_of(windows);
-            let live = niri::windows().into_iter().map(|w| w.id).collect();
-            layouts.update(|current| merge_initial_layouts(current, initial, &live));
+        if let Ok(value) = result {
+            layouts.update(|cache| cache.accept_snapshot(&value, &niri::windows()));
         }
     });
     let viewports = memo(move || {
-        viewport::project(
-            &niri::workspaces(),
-            &niri::windows(),
-            &layouts.get(),
-            &output_name,
-            size,
-        )
+        layouts.with(|cache| {
+            viewport::project(
+                &niri::workspaces(),
+                &niri::windows(),
+                cache,
+                &output_name,
+                size,
+            )
+        })
     });
     // Browsing belongs to this panel, not the compositor. Keep it across live card rebuilds.
     let browsing = signal(BrowseState::default());

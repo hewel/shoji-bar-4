@@ -1,6 +1,6 @@
 //! Workspace projection and panel-local browsing in output logical coordinates.
 
-use super::Layout;
+use super::layouts::{Layout, LayoutCache};
 use anti_webui::shell::niri::{Window, Workspace};
 use std::collections::{BTreeMap, HashMap};
 
@@ -97,7 +97,7 @@ impl WorkspaceViewport {
 pub(super) fn project(
     workspaces: &[Workspace],
     windows: &[Window],
-    layouts: &HashMap<u64, Layout>,
+    layouts: &LayoutCache,
     output: &str,
     output_size: (f32, f32),
 ) -> Vec<WorkspaceViewport> {
@@ -114,7 +114,7 @@ pub(super) fn project(
         let window_count = assigned.len();
         let mut columns = BTreeMap::<usize, Vec<(&Window, Layout)>>::new();
         for &window in assigned.iter().filter(|window| !window.is_floating) {
-            let Some(layout) = layouts.get(&window.id).copied() else {
+            let Some(layout) = layouts.get(window.id) else {
                 continue;
             };
             columns
@@ -157,7 +157,7 @@ pub(super) fn project(
             .unwrap_or(0.0)
             .clamp(0.0, (content_width - screen_w).max(0.0));
         for window in assigned.into_iter().filter(|window| window.is_floating) {
-            let Some(layout) = layouts.get(&window.id) else {
+            let Some(layout) = layouts.get(window.id) else {
                 continue;
             };
             // Floating positions are relative to the estimated initial workspace view.

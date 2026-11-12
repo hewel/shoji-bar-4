@@ -1,5 +1,23 @@
+use super::layouts::Layout;
 use super::*;
 use anti_webui::shell::niri::Workspace;
+
+fn layout_cache(entries: impl IntoIterator<Item = (u64, Layout)>) -> LayoutCache {
+    let windows: Vec<_> = entries
+        .into_iter()
+        .map(|(id, layout)| {
+            let position = (layout.column > 0).then_some([layout.column, layout.row]);
+            json!({"id": id, "layout": {
+                "pos_in_scrolling_layout": position,
+                "tile_size": [layout.width, layout.height],
+                "tile_pos_in_workspace_view": layout.view_position,
+            }})
+        })
+        .collect();
+    let mut cache = LayoutCache::default();
+    cache.apply_event(&json!({"WindowsChanged": {"windows": windows}}));
+    cache
+}
 
 fn workspace(id: u64, output: &str) -> Workspace {
     Workspace {
@@ -63,7 +81,7 @@ fn wheel_browsing_is_local_bounded_and_survives_card_rebuilds() {
     let slots = Cell::new(None);
     let bubbled = Rc::new(Cell::new(0));
     let outer_events = bubbled.clone();
-    let layouts = HashMap::from([
+    let layouts = layout_cache([
         (1, tiled(1, 1, 1600.0, 900.0)),
         (2, tiled(2, 1, 1600.0, 900.0)),
     ]);
@@ -154,7 +172,7 @@ fn workspaces_are_ordered_by_index_not_niri_event_order() {
             workspace(3, "DP-1"),
         ],
         &[],
-        &HashMap::new(),
+        &LayoutCache::default(),
         "DP-1",
         (1600.0, 900.0),
     );
@@ -170,12 +188,18 @@ fn workspaces_are_ordered_by_index_not_niri_event_order() {
 #[test]
 fn viewport_scale_and_panel_size_do_not_depend_on_offscreen_windows() {
     let workspaces = [workspace(1, "DP-1"), workspace(2, "DP-1")];
-    let pair = viewport::project(&workspaces, &[], &HashMap::new(), "DP-1", (1600.0, 900.0));
+    let pair = viewport::project(
+        &workspaces,
+        &[],
+        &LayoutCache::default(),
+        "DP-1",
+        (1600.0, 900.0),
+    );
     let before = panel_geometry(&pair, 1120.0);
     let populated = viewport::project(
         &workspaces,
         &[window(1, 1, true)],
-        &HashMap::from([(1, floating(12000.0, 0.0, 8000.0, 4000.0))]),
+        &layout_cache([(1, floating(12000.0, 0.0, 8000.0, 4000.0))]),
         "DP-1",
         (1600.0, 900.0),
     );
@@ -191,7 +215,7 @@ fn viewport_scale_and_panel_size_do_not_depend_on_offscreen_windows() {
 
 #[test]
 fn viewport_clips_partial_windows_and_excludes_outside_hit_targets() {
-    let layouts = HashMap::from([
+    let layouts = layout_cache([
         (1, floating(-50.0, -50.0, 400.0, 300.0)),
         (2, floating(1500.0, 800.0, 400.0, 300.0)),
         (3, floating(-400.0, 0.0, 400.0, 300.0)),
@@ -218,7 +242,7 @@ fn viewport_clips_partial_windows_and_excludes_outside_hit_targets() {
 
 #[test]
 fn projection_keeps_columns_floating_positions_and_active_windows() {
-    let layouts = HashMap::from([
+    let layouts = layout_cache([
         (1, tiled(1, 1, 800.0, 900.0)),
         (2, tiled(1, 2, 800.0, 900.0)),
         (3, tiled(2, 1, 1000.0, 900.0)),
@@ -262,7 +286,7 @@ fn projection_keeps_columns_floating_positions_and_active_windows() {
 
 #[test]
 fn browsing_tracks_changed_bounds_without_losing_panel_local_position() {
-    let layouts = HashMap::from([
+    let layouts = layout_cache([
         (1, tiled(1, 1, 1600.0, 900.0)),
         (2, tiled(2, 1, 1600.0, 900.0)),
         (3, floating(-120.0, 80.0, 400.0, 300.0)),
@@ -304,54 +328,91 @@ fn browsing_tracks_changed_bounds_without_losing_panel_local_position() {
     );
 }
 
+fn cached_geometry(cache: &LayoutCache, windows: &[Window]) -> Vec<(u64, f32, f32, f32, f32)> {
+    let viewports = viewport::project(
+        &[workspace(1, "DP-1")],
+        windows,
+        cache,
+        "DP-1",
+        (1600.0, 900.0),
+    );
+    geometry(&viewports[0], &BrowseState::default())
+}
+
 #[test]
-fn layout_events_replace_initial_state_and_follow_window_changes() {
-    let initial = json!({"WindowsChanged": {"windows": [
-        {"id": 1, "layout": {"pos_in_scrolling_layout": [1, 1], "tile_size": [800, 900]}},
-        {"id": 2, "layout": {"pos_in_scrolling_layout": [2, 1], "tile_size": [800, 900]}}
-    ]}});
-    let mut layouts = HashMap::new();
-    apply_layout_event(&mut layouts, &initial);
-    assert_eq!(layouts.len(), 2);
-    apply_layout_event(
-        &mut layouts,
-        &json!({"WindowLayoutsChanged": {"changes": [
-            [1, {"pos_in_scrolling_layout": [3, 2], "tile_size": [640, 480]}]
-        ]}}),
+fn layout_events_update_visible_geometry_and_remove_unlocated_windows() {
+    let windows = [window(1, 1, false), window(2, 1, false)];
+    let mut cache = layout_cache([
+        (1, tiled(1, 1, 800.0, 900.0)),
+        (2, tiled(2, 1, 800.0, 900.0)),
+    ]);
+    cache.apply_event(&json!({"WindowLayoutsChanged": {"changes": [
+        [1, {"pos_in_scrolling_layout": [3, 2], "tile_size": [640, 480]}]
+    ]}}));
+    assert_eq!(
+        cached_geometry(&cache, &windows),
+        [(2, 0.0, 0.0, 800.0, 900.0), (1, 806.0, 0.0, 640.0, 480.0),]
     );
-    assert_eq!(layouts[&1].column, 3);
-    assert_eq!(layouts[&1].height, 480.0);
-    apply_layout_event(
-        &mut layouts,
-        &json!({"WindowOpenedOrChanged": {"window": {"id": 2, "is_floating": true}}}),
+    cache
+        .apply_event(&json!({"WindowOpenedOrChanged": {"window": {"id": 2, "is_floating": true}}}));
+    assert_eq!(
+        cached_geometry(&cache, &windows),
+        [(1, 0.0, 0.0, 640.0, 480.0)]
     );
-    apply_layout_event(&mut layouts, &json!({"WindowClosed": {"id": 1}}));
-    assert!(layouts.is_empty());
+    cache.apply_event(&json!({"WindowClosed": {"id": 1}}));
+    assert!(cached_geometry(&cache, &windows).is_empty());
 }
 
 #[test]
 fn floating_layout_events_keep_compositor_positions() {
-    let mut layouts = HashMap::new();
-    apply_layout_event(
-        &mut layouts,
-        &json!({"WindowOpenedOrChanged": {"window": {
-            "id": 7, "is_floating": true,
-            "layout": {"pos_in_scrolling_layout": null, "tile_size": [400, 300], "tile_pos_in_workspace_view": [120, 80]}
-        }}}),
+    let mut cache = LayoutCache::default();
+    cache.apply_event(&json!({"WindowOpenedOrChanged": {"window": {
+        "id": 7, "is_floating": true,
+        "layout": {"pos_in_scrolling_layout": null, "tile_size": [400, 300], "tile_pos_in_workspace_view": [120, 80]}
+    }}}));
+    assert_eq!(
+        cached_geometry(&cache, &[window(7, 1, true)]),
+        [(7, 120.0, 80.0, 400.0, 300.0)]
     );
-    assert_eq!(layouts[&7].view_position, Some((120.0, 80.0)));
-    assert_eq!((layouts[&7].width, layouts[&7].height), (400.0, 300.0));
 }
 
 #[test]
-fn initial_response_does_not_replace_newer_events_or_closed_windows() {
-    let old = tiled(1, 1, 800.0, 900.0);
-    let new = Layout { column: 3, ..old };
-    let mut current = HashMap::from([(1, new), (2, old)]);
-    merge_initial_layouts(
-        &mut current,
-        HashMap::from([(1, old), (3, old)]),
-        &HashSet::from([1, 3]),
+fn delayed_snapshot_preserves_newer_geometry_and_does_not_revive_closed_windows() {
+    let mut cache = layout_cache([
+        (1, tiled(1, 1, 800.0, 900.0)),
+        (2, tiled(2, 1, 800.0, 900.0)),
+        (4, tiled(4, 1, 800.0, 900.0)),
+    ]);
+    cache.apply_event(&json!({"WindowLayoutsChanged": {"changes": [
+        [1, {"pos_in_scrolling_layout": [3, 1], "tile_size": [640, 480]}]
+    ]}}));
+    cache.apply_event(&json!({"WindowClosed": {"id": 2}}));
+    let live = [window(1, 1, false), window(3, 1, false)];
+    cache.accept_snapshot(
+        &json!({"Windows": [
+            {"id": 1, "layout": {"pos_in_scrolling_layout": [1, 1], "tile_size": [800, 900]}},
+            {"id": 2, "layout": {"pos_in_scrolling_layout": [2, 1], "tile_size": [800, 900]}},
+            {"id": 3, "layout": {"pos_in_scrolling_layout": [1, 1], "tile_size": [800, 900]}}
+        ]}),
+        &live,
     );
-    assert_eq!(current, HashMap::from([(1, new), (3, old)]));
+    assert_eq!(
+        cached_geometry(&cache, &live),
+        [(3, 0.0, 0.0, 800.0, 900.0), (1, 806.0, 0.0, 640.0, 480.0),]
+    );
+    assert_eq!(cache.get(2), None);
+    assert_eq!(cache.get(4), None);
+    cache.apply_event(&json!({"WindowClosed": {"id": 1}}));
+    assert_eq!(
+        cached_geometry(&cache, &live),
+        [(3, 0.0, 0.0, 800.0, 900.0)]
+    );
+    // A later full refresh replaces the cache rather than merging stale layouts.
+    cache.apply_event(&json!({"WindowsChanged": {"windows": [
+        {"id": 1, "layout": {"pos_in_scrolling_layout": [1, 1], "tile_size": [500, 600]}}
+    ]}}));
+    assert_eq!(
+        cached_geometry(&cache, &live),
+        [(1, 0.0, 0.0, 500.0, 600.0)]
+    );
 }
