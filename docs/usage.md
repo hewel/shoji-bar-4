@@ -40,7 +40,7 @@ The layer namespaces are `shoji-bar-4-bar`, `-dock`, `-quick-settings`, `-calend
 The running shell takes commands over its socket (`$XDG_RUNTIME_DIR/shoji-bar-4.$WAYLAND_DISPLAY.sock`):
 
 ```sh
-shoji-bar-4 msg toggle launcher [OUTPUT]       # without OUTPUT: the output of the focused window
+shoji-bar-4 msg toggle launcher [OUTPUT]       # output selection described below
 shoji-bar-4 msg toggle overview [OUTPUT]        # Niri workspace/window overview
 shoji-bar-4 msg toggle quick-settings [OUTPUT]
 shoji-bar-4 msg toggle calendar [OUTPUT]
@@ -53,7 +53,7 @@ shoji-bar-4 msg status                         # open panels, running clocks and
 shoji-bar-4 msg quit
 ```
 
-Without `OUTPUT`, `toggle` closes an already-open panel of the same kind, even if keyboard focus has moved or no window is focused. Otherwise it opens on the focused window's output, falling back to the first output. An explicit `OUTPUT` keeps the toggle local to that output; `open` always opens on the selected output rather than closing the panel.
+Without `OUTPUT`, `toggle` closes an already-open panel of the same kind, even if keyboard focus has moved or no window is focused. When opening, Niri's focused workspace determines the output, including on empty workspaces and while a panel is closing. If that information is unavailable, the focused window's output is used, then the first output. An explicit `OUTPUT` keeps the toggle local to that output; `open` always opens on the selected output rather than closing the panel.
 
 ## Settings
 

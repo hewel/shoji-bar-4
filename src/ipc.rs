@@ -15,12 +15,13 @@
 //! shoji-bar-4 msg status
 //! ```
 //!
-//! Without an output, a panel opens where the window with the keyboard is.
+//! Without an output, prefer Niri's focused workspace, then the focused window, then the first output.
 //! An implicit toggle closes an already-open panel of the same kind before resolving output.
 
 use crate::panels::{self, Panel};
 use crate::settings::{ThemeMode, settings};
 use anti_webui::prelude::*;
+use anti_webui::shell::niri;
 use anti_webui::shell::prelude::*;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
@@ -119,12 +120,32 @@ fn status() -> String {
     )
 }
 
-/// The output where the window with the keyboard is, else the first.
+/// The compositor's focused workspace output, then the active window's output, else the first.
 pub fn focused_output() -> Option<String> {
-    toplevels()
-        .active()
-        .and_then(|t| t.outputs.first().cloned())
-        .or_else(|| outputs().first().map(|o| o.name.clone()))
+    resolve_focused_output(
+        niri::workspaces(),
+        || {
+            toplevels()
+                .active()
+                .and_then(|t| t.outputs.first().cloned())
+        },
+        || outputs().into_iter().next().map(|o| o.name),
+    )
+}
+
+fn resolve_focused_output(
+    workspaces: Vec<niri::Workspace>,
+    window_output: impl FnOnce() -> Option<String>,
+    first_output: impl FnOnce() -> Option<String>,
+) -> Option<String> {
+    // Workspace focus survives a keyboard-interactive layer and its closing animation;
+    // toplevel focus does not. Only use the fallback when that compositor fact is absent.
+    workspaces
+        .into_iter()
+        .find(|workspace| workspace.is_focused)
+        .and_then(|workspace| workspace.output)
+        .or_else(window_output)
+        .or_else(first_output)
 }
 
 fn run(line: &str, resolve_output: impl FnOnce() -> Option<String>) -> Result<String, String> {
@@ -224,5 +245,79 @@ mod tests {
         run("toggle overview", || Some("DP-2".into())).unwrap();
         assert_eq!(panels::current(), Some(("DP-2".into(), Panel::Overview)));
         panels::close();
+    }
+
+    #[test]
+    fn rapid_toggles_follow_workspace_focus_while_window_focus_is_absent() {
+        let mut workspaces = vec![
+            niri::Workspace {
+                id: 1,
+                output: Some("DP-1".into()),
+                is_active: true,
+                ..Default::default()
+            },
+            niri::Workspace {
+                id: 2,
+                output: Some("DP-2".into()),
+                is_active: true,
+                is_focused: true,
+                ..Default::default()
+            },
+        ];
+        panels::close();
+        for press in 0..8 {
+            run("toggle overview", || {
+                resolve_focused_output(
+                    workspaces.clone(),
+                    || (press == 0).then(|| "DP-2".into()),
+                    || Some("DP-1".into()),
+                )
+            })
+            .unwrap();
+            assert_eq!(
+                panels::current(),
+                if press % 2 == 0 {
+                    Some(("DP-2".into(), Panel::Overview))
+                } else {
+                    None
+                },
+            );
+        }
+
+        // A real workspace-focus change wins, even if the toplevel source is stale.
+        workspaces[0].is_focused = true;
+        workspaces[1].is_focused = false;
+        run("toggle overview", || {
+            resolve_focused_output(workspaces, || Some("DP-2".into()), || Some("DP-2".into()))
+        })
+        .unwrap();
+        assert_eq!(panels::current(), Some(("DP-1".into(), Panel::Overview)));
+        panels::close();
+    }
+
+    #[test]
+    fn opening_without_workspace_focus_retains_window_and_output_fallbacks() {
+        panels::close();
+        run("toggle overview", || {
+            resolve_focused_output(Vec::new(), || Some("DP-2".into()), || Some("DP-1".into()))
+        })
+        .unwrap();
+        assert_eq!(panels::current(), Some(("DP-2".into(), Panel::Overview)));
+        panels::close();
+        run("toggle overview", || {
+            resolve_focused_output(Vec::new(), || None, || Some("DP-1".into()))
+        })
+        .unwrap();
+        assert_eq!(panels::current(), Some(("DP-1".into(), Panel::Overview)));
+        panels::close();
+        assert_eq!(
+            run("toggle overview", || resolve_focused_output(
+                Vec::new(),
+                || None,
+                || None
+            )),
+            Err("no output".into()),
+        );
+        assert_eq!(panels::current(), None);
     }
 }
