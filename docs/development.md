@@ -31,13 +31,14 @@ shoji-bar-4 preview bar left.png --bar-position left
 shoji-bar-4 preview quick-settings right.png --bar-position right --scale 1
 ```
 
-- **Parts**: `bar`, `dock`, `workspaces`, `title`, `quick-settings`, `calendar`, `launcher`, `clipboard`, `media`, `power`, `lock` and `notifications`.
+- **Parts**: `bar`, `dock`, `workspaces`, `title`, `quick-settings`, `calendar`, `launcher`, `clipboard`, `media`, `power`, `overview`, `lock` and `notifications`.
   - In `lock`, the password is `shoji`, and PAM is not used.
   - `title` is the window island with a made-up window whose title goes between a long one and a short one every `--switch` ms (80 by default), from 1.2 s for a second and a half, and then stays on the one `--end` names (`long` or `short`). With `--windows`, the two titles belong to two windows that take the keyboard in turn. With `--spinner`, the title is a terminal's with a spinner in front, as Claude Code's is, which at the end changes to another title.
-- **Settings**: `preview` doesn't save them. `--bar-position top|left|right` selects the bar edge (top by default), including for panel and component previews.
+- **Settings**: `preview` doesn't save them. `--bar-position top|left|right` selects the bar edge (top by default), including for panel and component previews. `--output NAME` selects the output instead of the first one.
 - **Real services**: the previews act on them.
   - A click on a network, Bluetooth or audio row really changes it.
   - Enter and Delete in `clipboard` act on the real cliphist and clipboard.
+  - Window and workspace clicks in `overview` really change Niri's focus.
 - **`--click X,Y`**: a click.
 - **`--right-click X,Y`**: a right click.
 - **`--drag X1,Y1:X2,Y2`**: after the clicks, presses at the first point, moves to the second and lets go.

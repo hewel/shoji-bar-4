@@ -3,6 +3,7 @@
 //!
 //! ```text
 //! shoji-bar-4 msg toggle launcher [OUTPUT]
+//! shoji-bar-4 msg toggle overview [OUTPUT]
 //! shoji-bar-4 msg toggle quick-settings [OUTPUT]
 //! shoji-bar-4 msg toggle calendar [OUTPUT]
 //! shoji-bar-4 msg toggle clipboard [OUTPUT]

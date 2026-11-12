@@ -17,16 +17,18 @@ pub enum Panel {
     Clipboard,
     Media,
     Power,
+    Overview,
 }
 
 impl Panel {
-    pub(crate) const ALL: [Panel; 6] = [
+    pub(crate) const ALL: [Panel; 7] = [
         Self::QuickSettings,
         Self::Calendar,
         Self::Launcher,
         Self::Clipboard,
         Self::Media,
         Self::Power,
+        Self::Overview,
     ];
 
     pub(crate) fn name(self) -> &'static str {
@@ -37,6 +39,7 @@ impl Panel {
             Self::Clipboard => "clipboard",
             Self::Media => "media",
             Self::Power => "power",
+            Self::Overview => "overview",
         }
     }
 
@@ -54,7 +57,10 @@ impl Panel {
     }
 
     fn centered(self) -> bool {
-        matches!(self, Self::Launcher | Self::Clipboard | Self::Power)
+        matches!(
+            self,
+            Self::Launcher | Self::Clipboard | Self::Power | Self::Overview
+        )
     }
 
     /// Whether the desktop around it is veiled (and so blurred by the compositor), for what is in
@@ -190,7 +196,9 @@ fn place_panel(root: Div, panel: Panel, at: BarPlacement) -> Div {
             PanelSide::Left => root.items_start().justify_start().pl(clearance),
             PanelSide::Right => root.items_end().justify_start().pr(clearance),
         },
-        Panel::Launcher | Panel::Clipboard | Panel::Power => root.items_center().justify_center(),
+        Panel::Launcher | Panel::Clipboard | Panel::Power | Panel::Overview => {
+            root.items_center().justify_center()
+        }
     }
 }
 
@@ -234,6 +242,7 @@ pub(crate) fn surface_at(
             crate::media_panel::panel(output.clone(), anchor, at)
         }
         Panel::Power => crate::power_dialog::panel(),
+        Panel::Overview => crate::overview::panel(output.clone()),
     };
     // Keys go to what has the focus, and with nothing focused not to here but to what holds it: the
     // panel takes the focus as it opens, for Escape. The launcher and the clipboard give it to their

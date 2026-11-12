@@ -182,6 +182,7 @@ dependencies = [
  "libc",
  "libloading",
  "rustix",
+ "serde_json",
  "wayland-backend",
  "wayland-client",
  "wayland-protocols",

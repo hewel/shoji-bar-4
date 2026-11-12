@@ -65,13 +65,10 @@ pub fn view(output: Output, at: BarPlacement) -> Div {
         )
         .child(
             leading
-                .child(show(
-                    || settings().with(|s| s.launcher_enabled),
-                    {
-                        let output = output.clone();
-                        move || launcher_island(output.clone(), at)
-                    },
-                ))
+                .child(show(|| settings().with(|s| s.launcher_enabled), {
+                    let output = output.clone();
+                    move || launcher_island(output.clone(), at)
+                }))
                 .child(workspaces_island(
                     workspaces_of(output.clone()),
                     Rc::new({
@@ -86,6 +83,10 @@ pub fn view(output: Output, at: BarPlacement) -> Div {
                     }),
                     at,
                 ))
+                .child(show(crate::overview::available, {
+                    let output = output.clone();
+                    move || overview_island(output.clone(), at)
+                }))
                 .child(window_island(output.clone(), at)),
         )
         .child(clock_island(output.clone(), at))
@@ -130,6 +131,26 @@ fn launcher_island(output: Output, at: BarPlacement) -> Div {
         .on_hover(move |h| hovered.set(h))
         .on_click(move |_| toggle(&output, Panel::Launcher))
         .child(launcher_glyph(open, hovered, || 15.0).size(26.0))
+}
+
+/// Opens the current output's workspace overview.
+fn overview_island(output: Output, at: BarPlacement) -> Div {
+    let open = memo({
+        let output = output.clone();
+        move || is_open(&output, Panel::Overview)
+    });
+    let side = if at.is_vertical() {
+        VERTICAL_ISLAND
+    } else {
+        ISLAND
+    };
+    bar_island(at)
+        .size(side)
+        .justify_center()
+        .on_click(move |_| toggle(&output, Panel::Overview))
+        .child(icon_btn(icons::WORKSPACES, 26.0, move |c| {
+            if open.get() { c.primary } else { c.on_surface }
+        }))
 }
 
 /// A workspace as the bar shows it.

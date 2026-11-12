@@ -145,12 +145,12 @@ fn main_page() -> Div {
         .gap(12.0_f32)
         .child(settle_in(0, header()))
         .child(tiles())
-        .child(settle_in(4, sliders()))
+        .child(settle_in(5, sliders()))
         .child(show(
             || battery().available(),
-            || settle_in(5, crate::battery_card::card()),
+            || settle_in(6, crate::battery_card::card()),
         ))
-        .child(crate::notify::history(6))
+        .child(crate::notify::history(7))
 }
 
 /// A section of the panel on a card of its own.
@@ -646,6 +646,19 @@ fn tiles() -> Div {
                     Some(Page::Sound),
                 )),
         )
+        .child(settle_in(4, row()).child(tile(
+            || icons::WORKSPACES,
+            "Overview",
+            crate::overview::summary,
+            || false,
+            crate::overview::available,
+            || {
+                if let Some((output, _)) = crate::panels::current() {
+                    crate::panels::open(&output, crate::panels::Panel::Overview);
+                }
+            },
+            None,
+        )))
 }
 
 /// The volume and the brightness.

@@ -12,6 +12,7 @@ mod lock;
 mod media_panel;
 mod notify;
 mod osd;
+mod overview;
 mod pam;
 mod panels;
 mod placement;

@@ -51,6 +51,16 @@ The icon under the pointer lifts a little and shows its name.
   - ‹ and ›, or the mouse wheel, go through the months, which slide over; the month's name goes back to this one.
 - Wavy rings for CPU, memory and temperature.
 
+## Workspace overview
+
+Open it from the bar's **Overview** icon, **Quick Settings → Overview**, or with `shoji-bar-4 msg toggle overview [OUTPUT]`. The bar icon appears when Niri is available and uses the accent color while the overview is open.
+
+- Each output shows its own workspaces in a compact, scrollable canvas. Niri's tiled columns and rows keep their relative proportions and tile sizes; floating windows use their compositor-reported positions and sizes.
+- Tiled positions are reconstructed from column/row indices because Niri's IPC does not expose their current viewport coordinates.
+- Application icons and titles identify windows. The active workspace, focused window, urgent windows and current viewport are distinguished with the shell's colors.
+- Click a window to focus it, or a workspace heading to show that workspace; the overview closes. Escape, the close button or a click outside also closes it.
+- Requires niri's IPC. It uses AntiWebUI directly, without Noctalia, Luau, `grim` or screenshots.
+
 ## Launcher
 
 - It opens in the middle of the screen, its items coming in one after another.

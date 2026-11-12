@@ -33,7 +33,7 @@ The window frames can follow the shell's colors:
 - It sends its color scheme there as `theme.set` (`src/wm.rs`): on start, on reconnecting (including after a config reload), and whenever the scheme changes.
 - A config that doesn't handle `theme.set` ignores it.
 
-The layer namespaces are `shoji-bar-4-bar`, `-dock`, `-quick-settings`, `-calendar`, `-launcher`, `-clipboard`, `-media`, `-notifications`, `-osd`, `-power` and `-wallpaper`. Use them to give layers ShojiWM effects such as blur.
+The layer namespaces are `shoji-bar-4-bar`, `-dock`, `-quick-settings`, `-calendar`, `-launcher`, `-overview`, `-clipboard`, `-media`, `-notifications`, `-osd`, `-power` and `-wallpaper`. Use them to give layers ShojiWM effects such as blur.
 
 ## Commands
 
@@ -41,6 +41,7 @@ The running shell takes commands over its socket (`$XDG_RUNTIME_DIR/shoji-bar-4.
 
 ```sh
 shoji-bar-4 msg toggle launcher [OUTPUT]       # without OUTPUT: the output of the focused window
+shoji-bar-4 msg toggle overview [OUTPUT]        # Niri workspace/window overview
 shoji-bar-4 msg toggle quick-settings [OUTPUT]
 shoji-bar-4 msg toggle calendar [OUTPUT]
 shoji-bar-4 msg toggle clipboard [OUTPUT]

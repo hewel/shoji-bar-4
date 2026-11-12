@@ -2,7 +2,7 @@
 //! working on them:
 //!
 //! `shoji-bar-4 preview <part> <out.png> [--width W] [--height H] [--scale S] [--light]
-//!  [--bar-position top|left|right] [--pointer X,Y] [--click X,Y] [--right-click X,Y]
+//!  [--bar-position top|left|right] [--output NAME] [--pointer X,Y] [--click X,Y] [--right-click X,Y]
 //!  [--drag X,Y:X,Y] [--escape] [--key K] [--late] [--ms N]`
 //!
 //! The pointer and clicks are in logical pixels, and `--escape` presses Escape after the clicks;
@@ -49,9 +49,9 @@ pub fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         "title" if at.is_vertical() => (80.0, 80.0),
         "title" => (480.0, placement::HEIGHT as f32),
         "dock" => (900.0, 136.0),
-        "launcher" | "quick-settings" | "calendar" | "clipboard" | "media" | "power" | "lock" => {
-            (1600.0, 1000.0)
-        }
+        "overview" => (1600.0, 1000.0),
+        "launcher" | "quick-settings" | "calendar" | "clipboard" | "media" | "power"
+        | "lock" => (1600.0, 1000.0),
         _ => (800.0, 600.0),
     };
     let lw: f32 = opt("--width")
@@ -98,7 +98,16 @@ pub fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         &gpu.device,
         anti_webui::wgpu::wgpu::TextureFormat::Rgba8Unorm,
     );
-    let output = outputs().into_iter().next();
+    let available_outputs = outputs();
+    let output = match opt("--output") {
+        Some(name) => Some(
+            available_outputs
+                .into_iter()
+                .find(|output| output.name == name)
+                .ok_or_else(|| format!("unknown output: {name}"))?,
+        ),
+        None => available_outputs.into_iter().next(),
+    };
     crate::settings::never_save();
     let mut ui = Ui::new(move || {
         if light {
@@ -211,6 +220,7 @@ pub fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
             },
             "dock" => crate::dock::view(output, signal(InputRegion::Full)),
             "lock" => crate::lock::view(output),
+            "overview" => crate::panels::view(output, crate::panels::Panel::Overview),
             "launcher" | "quick-settings" | "calendar" | "clipboard" | "media" | "power" => {
                 let panel = crate::panels::Panel::from_name(&part).unwrap();
                 crate::panels::view(output, panel)
