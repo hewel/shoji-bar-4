@@ -16,6 +16,7 @@
 //! ```
 //!
 //! Without an output, a panel opens where the window with the keyboard is.
+//! An implicit toggle closes an already-open panel of the same kind before resolving output.
 
 use crate::panels::{self, Panel};
 use crate::settings::{ThemeMode, settings};
@@ -71,7 +72,7 @@ pub fn serve() {
     };
     let to_ui = ui_channel(
         move |(line, answer): (String, std::sync::mpsc::Sender<String>)| {
-            let _ = answer.send(match run(&line) {
+            let _ = answer.send(match run(&line, focused_output) {
                 Ok(said) if said.is_empty() => "ok".into(),
                 Ok(said) => format!("ok {said}"),
                 Err(e) => e,
@@ -126,7 +127,7 @@ pub fn focused_output() -> Option<String> {
         .or_else(|| outputs().first().map(|o| o.name.clone()))
 }
 
-fn run(line: &str) -> Result<String, String> {
+fn run(line: &str, resolve_output: impl FnOnce() -> Option<String>) -> Result<String, String> {
     let words: Vec<&str> = line.split_whitespace().collect();
     match words.as_slice() {
         ["toggle" | "open", name, rest @ ..] => {
@@ -134,15 +135,22 @@ fn run(line: &str) -> Result<String, String> {
             if !panel.enabled() {
                 return Err(format!("{name} is disabled in Settings"));
             }
-            let output = rest
-                .first()
-                .map(|s| s.to_string())
-                .or_else(focused_output)
-                .ok_or("no output")?;
-            let open_now = panels::current().is_some_and(|(o, p)| o == output && p == panel);
+            // A panel can take keyboard focus away from the toplevel that chose its output.
+            // An implicit toggle closes that panel before consulting the changed focus.
+            let open_now = panels::current().is_some_and(|(output, open_panel)| {
+                open_panel == panel
+                    && rest
+                        .first()
+                        .is_none_or(|requested| *requested == output.as_str())
+            });
             if words[0] == "toggle" && open_now {
                 panels::close();
             } else {
+                let output = rest
+                    .first()
+                    .map(|s| s.to_string())
+                    .or_else(resolve_output)
+                    .ok_or("no output")?;
                 panels::open(&output, panel);
             }
             Ok(String::new())
@@ -175,5 +183,46 @@ fn run(line: &str) -> Result<String, String> {
             Ok(String::new())
         }
         _ => Err(format!("unknown command: {line}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn repeated_implicit_toggle_closes_even_when_focus_moves_or_disappears() {
+        panels::close();
+        run("toggle overview", || Some("DP-2".into())).unwrap();
+        assert_eq!(panels::current(), Some(("DP-2".into(), Panel::Overview)));
+
+        // A keyboard-interactive panel can hide the formerly focused toplevel.
+        // The next lookup would then fall back to a different output.
+        run("toggle overview", || Some("DP-1".into())).unwrap();
+        assert_eq!(panels::current(), None);
+
+        run("toggle overview", || Some("DP-2".into())).unwrap();
+        run("toggle overview", || None).unwrap();
+        assert_eq!(panels::current(), None);
+    }
+
+    #[test]
+    fn explicit_target_and_open_keep_their_output_selection() {
+        panels::close();
+        run("toggle overview DP-2", || Some("DP-1".into())).unwrap();
+        assert_eq!(panels::current(), Some(("DP-2".into(), Panel::Overview)));
+        run("toggle overview DP-1", || Some("DP-2".into())).unwrap();
+        assert_eq!(panels::current(), Some(("DP-1".into(), Panel::Overview)));
+        run("toggle overview DP-1", || Some("DP-2".into())).unwrap();
+        assert_eq!(panels::current(), None);
+
+        run("open overview DP-1", || None).unwrap();
+        run("open overview", || Some("DP-2".into())).unwrap();
+        assert_eq!(panels::current(), Some(("DP-2".into(), Panel::Overview)));
+
+        run("open calendar DP-1", || None).unwrap();
+        run("toggle overview", || Some("DP-2".into())).unwrap();
+        assert_eq!(panels::current(), Some(("DP-2".into(), Panel::Overview)));
+        panels::close();
     }
 }

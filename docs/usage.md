@@ -53,6 +53,8 @@ shoji-bar-4 msg status                         # open panels, running clocks and
 shoji-bar-4 msg quit
 ```
 
+Without `OUTPUT`, `toggle` closes an already-open panel of the same kind, even if keyboard focus has moved or no window is focused. Otherwise it opens on the focused window's output, falling back to the first output. An explicit `OUTPUT` keeps the toggle local to that output; `open` always opens on the selected output rather than closing the panel.
+
 ## Settings
 
 Settings are kept in `$XDG_STATE_HOME/shoji-bar-4/settings.json` (usually `~/.local/state/…`). Changes made in the quick settings are saved there, and you can also edit the file by hand.
