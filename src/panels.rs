@@ -4,6 +4,7 @@
 //! panel starts to open until it has finished closing; a click outside the panel closes it.
 
 use crate::placement::{AnchorPoint, BarPlacement, PanelSide};
+use crate::settings::settings;
 use anti_webui::prelude::*;
 use anti_webui::shell::prelude::*;
 use std::cell::Cell;
@@ -43,6 +44,10 @@ impl Panel {
         Self::ALL.into_iter().find(|p| p.name() == name)
     }
 
+    pub(crate) fn enabled(self) -> bool {
+        self != Self::Launcher || settings().with(|s| s.launcher_enabled)
+    }
+
     /// Whether it gives the focus to a field of its own as it opens.
     fn has_field(self) -> bool {
         matches!(self, Self::Launcher | Self::Clipboard)
@@ -77,7 +82,17 @@ thread_local! {
 fn state() -> Open {
     OPEN.with(|o| {
         o.get().unwrap_or_else(|| {
-            let (s, _) = create_root(|| signal(None));
+            let (s, _) = create_root(|| {
+                let s = signal(None::<Invocation>);
+                effect(move || {
+                    if !Panel::Launcher.enabled()
+                        && s.get_untracked().is_some_and(|o| o.panel == Panel::Launcher)
+                    {
+                        s.set(None);
+                    }
+                });
+                s
+            });
             o.set(Some(s));
             s
         })
@@ -100,6 +115,9 @@ pub fn toggle_at(output: &Output, panel: Panel, anchor: AnchorPoint) {
 }
 
 fn toggle_with(output: &Output, panel: Panel, anchor: Option<AnchorPoint>) {
+    if !panel.enabled() {
+        return;
+    }
     let now = is_open(output, panel);
     state().set((!now).then(|| Invocation {
         output: output.name.clone(),
@@ -109,6 +127,9 @@ fn toggle_with(output: &Output, panel: Panel, anchor: Option<AnchorPoint>) {
 }
 
 pub fn open(output_name: &str, panel: Panel) {
+    if !panel.enabled() {
+        return;
+    }
     state().set(Some(Invocation {
         output: output_name.to_owned(),
         panel,
@@ -303,6 +324,32 @@ mod tests {
             assert_eq!(opened.get().and_then(|i| i.anchor), None);
         });
         owner.dispose();
+        close();
+    }
+
+    #[test]
+    fn disabling_launcher_closes_it_and_blocks_opening_without_closing_other_panels() {
+        crate::settings::never_save();
+        settings().set(crate::settings::Settings::default());
+        close();
+        let output = Output {
+            name: "DP-1".to_owned(),
+            ..Default::default()
+        };
+        open(&output.name, Panel::Launcher);
+        assert!(is_open(&output, Panel::Launcher));
+        settings().update(|s| s.launcher_enabled = false);
+        assert_eq!(current(), None);
+
+        open(&output.name, Panel::Calendar);
+        open("DP-2", Panel::Launcher);
+        toggle(&output, Panel::Launcher);
+        assert_eq!(current(), Some((output.name.clone(), Panel::Calendar)));
+
+        settings().update(|s| s.launcher_enabled = true);
+        assert!(is_open(&output, Panel::Calendar));
+        toggle(&output, Panel::Launcher);
+        assert!(is_open(&output, Panel::Launcher));
         close();
     }
 }

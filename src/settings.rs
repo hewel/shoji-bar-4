@@ -131,6 +131,8 @@ pub struct Settings {
     /// The desktop entry ids of the apps the dock always shows, in order.
     pub pinned: Vec<String>,
     pub bar_position: BarPosition,
+    pub launcher_enabled: bool,
+    pub dock_enabled: bool,
     pub clock_24h: bool,
     pub clock_seconds: bool,
     /// The user's picture, a copy kept next to this file; `None` for the desktop's.
@@ -156,6 +158,8 @@ impl Default for Settings {
             .map(String::from)
             .to_vec(),
             bar_position: BarPosition::Top,
+            launcher_enabled: true,
+            dock_enabled: true,
             clock_24h: true,
             clock_seconds: false,
             avatar: None,
@@ -173,6 +177,8 @@ impl Settings {
             "wallpaper": self.wallpaper.as_ref().map(|p| p.to_string_lossy().into_owned()),
             "pinned": self.pinned,
             "bar_position": self.bar_position.name(),
+            "launcher_enabled": self.launcher_enabled,
+            "dock_enabled": self.dock_enabled,
             "clock_24h": self.clock_24h,
             "clock_seconds": self.clock_seconds,
             "avatar": self.avatar.as_ref().map(|p| p.to_string_lossy().into_owned()),
@@ -208,6 +214,12 @@ impl Settings {
         }
         if let Some(p) = str_of("bar_position").and_then(BarPosition::from_name) {
             s.bar_position = p;
+        }
+        if let Some(b) = bool_of("launcher_enabled") {
+            s.launcher_enabled = b;
+        }
+        if let Some(b) = bool_of("dock_enabled") {
+            s.dock_enabled = b;
         }
         if let Some(b) = bool_of("clock_24h") {
             s.clock_24h = b;

@@ -113,40 +113,56 @@ fn account_section() -> Div {
     )
 }
 
-/// Where the bar is shown.
+/// The bar's position and optional desktop components.
 fn bar_section() -> Div {
     let positions = BarPosition::ALL;
     section()
-        .child(heading(icons::DESKTOP_WINDOWS, "Bar position"))
+        .child(heading(icons::DESKTOP_WINDOWS, "Desktop"))
+        .child(static_txt(TextStyle::BODY_MEDIUM, "Bar position"))
         .child(connected_button_group(
             positions.map(|p| p.label()),
             ButtonStyle::tonal(),
             move |i| settings().with(|s| s.bar_position == positions[i]),
             move |i| settings().update(|s| s.bar_position = positions[i]),
         ))
+        .child(setting_switch(
+            "Launcher",
+            Binding::new(
+                || settings().with(|s| s.launcher_enabled),
+                |on| settings().update(|s| s.launcher_enabled = on),
+            ),
+        ))
+        .child(setting_switch(
+            "Dock",
+            Binding::new(
+                || settings().with(|s| s.dock_enabled),
+                |on| settings().update(|s| s.dock_enabled = on),
+            ),
+        ))
+}
+
+fn setting_switch(label: &'static str, on: Binding<bool>) -> Div {
+    div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .px(4.0_f32)
+        .child(static_txt(TextStyle::BODY_MEDIUM, label).flex_1())
+        .child(switch(on))
 }
 
 /// How the clock in the bar reads.
 fn clock_section() -> Div {
-    let row = |label: &'static str, on: Binding<bool>| {
-        div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .px(4.0_f32)
-            .child(static_txt(TextStyle::BODY_MEDIUM, label).flex_1())
-            .child(switch(on))
-    };
     section()
         .child(heading(icons::SCHEDULE, "Clock"))
-        .child(row(
+        .child(setting_switch(
             "24-hour time",
             Binding::new(
                 || settings().with(|s| s.clock_24h),
                 |on| settings().update(|s| s.clock_24h = on),
             ),
         ))
-        .child(row(
+        .child(setting_switch(
             "Show seconds",
             Binding::new(
                 || settings().with(|s| s.clock_seconds),

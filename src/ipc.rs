@@ -130,6 +130,9 @@ fn run(line: &str) -> Result<String, String> {
     match words.as_slice() {
         ["toggle" | "open", name, rest @ ..] => {
             let panel = Panel::from_name(name).ok_or_else(|| format!("no panel called {name}"))?;
+            if !panel.enabled() {
+                return Err(format!("{name} is disabled in Settings"));
+            }
             let output = rest
                 .first()
                 .map(|s| s.to_string())

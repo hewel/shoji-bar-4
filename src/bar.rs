@@ -65,7 +65,13 @@ pub fn view(output: Output, at: BarPlacement) -> Div {
         )
         .child(
             leading
-                .child(launcher_island(output.clone(), at))
+                .child(show(
+                    || settings().with(|s| s.launcher_enabled),
+                    {
+                        let output = output.clone();
+                        move || launcher_island(output.clone(), at)
+                    },
+                ))
                 .child(workspaces_island(
                     workspaces_of(output.clone()),
                     Rc::new({

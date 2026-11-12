@@ -114,6 +114,20 @@ fn entries() -> Vec<Entry> {
 }
 
 pub fn view(output: Output, region: Signal<InputRegion>) -> Div {
+    let enabled = memo(|| settings().with(|s| s.dock_enabled));
+    effect(move || {
+        // Clear input while the owner is alive, not from a teardown callback.
+        if !enabled.get() {
+            region.set(InputRegion::Empty);
+        }
+    });
+    div().size_full().child(show(
+        move || enabled.get(),
+        move || enabled_view(output.clone(), region),
+    ))
+}
+
+fn enabled_view(output: Output, region: Signal<InputRegion>) -> Div {
     let list = memo(move || {
         entries()
             .into_iter()
@@ -228,7 +242,10 @@ pub fn view(output: Output, region: Signal<InputRegion>) -> Div {
                         .translate_y(down.get() * DROP)
                 })
                 .on_resized(move |w, h| body_size.set((w, h)))
-                .child(launcher_button(launcher_output))
+                .child(show(
+                    || settings().with(|s| s.launcher_enabled),
+                    move || launcher_button(launcher_output.clone()),
+                ))
                 .child(
                     div()
                         .flex()
@@ -565,4 +582,49 @@ fn launcher_button(output: Output) -> Div {
                         .dyn_style(move |s| s.translate_y(-rise.get())),
                 ),
         )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use anti_webui::core::{
+        Ui,
+        event::{Modifiers, WindowEvent},
+        geometry::{PointF, Scale, SizeI},
+    };
+    use std::cell::Cell;
+
+    #[test]
+    fn disabling_dock_releases_input_and_reenabling_restores_it() {
+        crate::settings::never_save();
+        settings().set(crate::settings::Settings::default());
+        let region_slot = Cell::new(None);
+        let mut ui = Ui::new(|| {
+            let region = signal(InputRegion::Empty);
+            region_slot.set(Some(region));
+            view(Output::default(), region)
+        });
+        let region = region_slot.get().unwrap();
+        ui.handle_event(WindowEvent::Resized {
+            size: SizeI::new(900, 136),
+            scale: Scale::from_f64(1.0),
+        });
+        ui.update();
+        assert_ne!(region.get(), InputRegion::Empty);
+        ui.handle_event(WindowEvent::PointerMoved {
+            position: PointF::new(450.0, 135.0),
+            modifiers: Modifiers::default(),
+        });
+        ui.update();
+        for _ in 0..3 {
+            settings().update(|s| s.dock_enabled = false);
+            ui.update();
+            assert_eq!(region.get(), InputRegion::Empty);
+            settings().update(|s| s.dock_enabled = true);
+            ui.update();
+            assert_ne!(region.get(), InputRegion::Empty);
+        }
+        // The preview owns its input signal inside the UI, not in an enclosing shell root.
+        drop(ui);
+    }
 }
