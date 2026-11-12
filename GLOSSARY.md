@@ -20,6 +20,9 @@ The geometric arrangement implied by a bar position: its main axis, thickness, c
 **Panel**:
 A transient shell surface such as Quick Settings, Calendar, Media, Launcher, Clipboard or Power.
 
+**Workspace viewport**:
+The browsable region in Overview that represents one workspace's windows at the proportions of the output's screen. It is neither the entire workspace nor the surrounding card with its heading.
+
 **Anchor point**:
 The centre of the island that invoked a panel, expressed in that output's logical coordinates.
 

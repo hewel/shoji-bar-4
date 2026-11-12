@@ -49,6 +49,14 @@ shoji-bar-4 preview quick-settings right.png --bar-position right --scale 1
 
 `src/shell_layer.rs` owns shell-surface creation, output binding, placement-driven reconfiguration and closing. Production uses its Wayland adapter; unit tests use the recording adapter through the same `open_bar` and `install_panels` interface. This covers multi-output assignment, unrelated-setting isolation, in-place placement updates and panel input changes without a compositor.
 
+## Overview viewport tests
+
+`src/overview/viewport.rs` owns workspace projection, panel-local browsing positions, range clamping and clipped drawing/hit geometry. `src/overview.rs` owns rendering, pixel scaling and event propagation; unchanged workspace positions do not invalidate their canvases. The tests in `src/overview/tests.rs` exercise the same projection and browsing interface as the panel, including window changes after scrolling, and retain a real `Ui` test for wheel propagation and card rebuilds.
+
+```sh
+cargo test --locked overview::tests
+```
+
 ## CPU reports
 
 When the shell keeps using CPU:

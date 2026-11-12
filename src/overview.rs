@@ -7,13 +7,16 @@ use crate::appinfo::app_id_icon;
 use crate::theme::{TextStyle, colors, elevation};
 use crate::ui::*;
 use anti_webui::prelude::*;
-use anti_webui::shell::niri::{self, Window, Workspace};
+use anti_webui::shell::niri::{self, Window};
 use anti_webui::shell::prelude::*;
 use anti_webui_md3e::icons;
 use serde_json::{Value, json};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 
-const GAP: f32 = 6.0;
+mod viewport;
+use viewport::{BrowseState, VisibleWindow, WorkspaceViewport};
+
 const CARD_PAD: f32 = 18.0;
 const GRID_GAP: f32 = 16.0;
 const PANEL_PAD: f32 = 18.0;
@@ -31,25 +34,6 @@ struct Layout {
     width: f32,
     height: f32,
     view_position: Option<(f32, f32)>,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-struct Tile {
-    window: Window,
-    x: f32,
-    y: f32,
-    width: f32,
-    height: f32,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-struct Ribbon {
-    workspace: Workspace,
-    tiles: Vec<Tile>,
-    window_count: usize,
-    viewport_x: f32,
-    viewport_width: f32,
-    viewport_height: f32,
 }
 
 fn layout_of(window: &Value) -> Option<Layout> {
@@ -152,101 +136,6 @@ fn apply_layout_event(layouts: &mut HashMap<u64, Layout>, event: &Value) {
     }
 }
 
-fn ribbons(
-    workspaces: &[Workspace],
-    windows: &[Window],
-    layouts: &HashMap<u64, Layout>,
-    output: &str,
-    output_size: (f32, f32),
-) -> Vec<Ribbon> {
-    let (screen_w, screen_h) = output_size;
-    let mut result = Vec::new();
-    for workspace in workspaces
-        .iter()
-        .filter(|workspace| workspace.output.as_deref() == Some(output))
-    {
-        let assigned: Vec<&Window> = windows
-            .iter()
-            .filter(|window| window.workspace_id == Some(workspace.id))
-            .collect();
-        let window_count = assigned.len();
-        let mut columns = BTreeMap::<usize, Vec<(Window, Layout)>>::new();
-        for window in assigned.into_iter().filter(|window| !window.is_floating) {
-            let Some(layout) = layouts.get(&window.id).copied() else {
-                continue;
-            };
-            columns
-                .entry(layout.column)
-                .or_default()
-                .push((window.clone(), layout));
-        }
-
-        let mut tiles = Vec::new();
-        let mut x = 0.0;
-        for entries in columns.values_mut() {
-            entries.sort_by_key(|(_, layout)| layout.row);
-            let column_w = entries
-                .iter()
-                .map(|(_, layout)| layout.width)
-                .fold(0.0, f32::max);
-            let mut y = 0.0;
-            for (window, layout) in entries {
-                tiles.push(Tile {
-                    window: window.clone(),
-                    x,
-                    y,
-                    width: layout.width,
-                    height: layout.height,
-                });
-                y += layout.height + GAP;
-            }
-            x += column_w + GAP;
-        }
-        let ribbon_w = if tiles.is_empty() {
-            screen_w
-        } else {
-            (x - GAP).max(screen_w)
-        };
-        let focus = tiles.iter().position(|tile| {
-            tile.window.is_focused || Some(tile.window.id) == workspace.active_window_id
-        });
-        let viewport_x = focus
-            .map(|i| tiles[i].x + tiles[i].width / 2.0 - screen_w / 2.0)
-            .unwrap_or(0.0)
-            .clamp(0.0, (ribbon_w - screen_w).max(0.0));
-        for window in windows
-            .iter()
-            .filter(|window| window.workspace_id == Some(workspace.id) && window.is_floating)
-        {
-            let Some(layout) = layouts.get(&window.id) else {
-                continue;
-            };
-            // Niri reports floating positions in the current workspace view. Put them into the
-            // same ribbon coordinates as the reconstructed tiled columns.
-            let Some((x, y)) = layout.view_position else {
-                continue;
-            };
-            tiles.push(Tile {
-                window: window.clone(),
-                x: viewport_x + x,
-                y,
-                width: layout.width,
-                height: layout.height,
-            });
-        }
-        result.push(Ribbon {
-            workspace: workspace.clone(),
-            tiles,
-            window_count,
-            viewport_x,
-            viewport_width: screen_w,
-            viewport_height: screen_h,
-        });
-    }
-    result.sort_by_key(|ribbon| ribbon.workspace.idx);
-    result
-}
-
 pub fn available() -> bool {
     niri::available()
 }
@@ -272,21 +161,21 @@ struct PanelGeometry {
     columns: usize,
 }
 
-fn card_width(ribbon: &Ribbon, scale: f32) -> f32 {
-    ribbon.viewport_width * scale + (CARD_PAD + CARD_BORDER) * 2.0
+fn card_width(viewport: &WorkspaceViewport, scale: f32) -> f32 {
+    viewport.viewport_width * scale + (CARD_PAD + CARD_BORDER) * 2.0
 }
 
-fn panel_geometry(ribbons: &[Ribbon], max_width: f32) -> PanelGeometry {
-    if ribbons.is_empty() {
+fn panel_geometry(viewports: &[WorkspaceViewport], max_width: f32) -> PanelGeometry {
+    if viewports.is_empty() {
         return PanelGeometry {
             scale: 0.0,
             width: max_width.min(360.0),
             columns: 1,
         };
     }
-    let viewport_width = ribbons
+    let viewport_width = viewports
         .iter()
-        .map(|ribbon| ribbon.viewport_width)
+        .map(|viewport| viewport.viewport_width)
         .fold(1.0, f32::max);
     let content_limit = max_width - PANEL_PAD * 2.0 - SCROLLBAR;
     let scale =
@@ -296,24 +185,12 @@ fn panel_geometry(ribbons: &[Ribbon], max_width: f32) -> PanelGeometry {
         .floor()
         .max(1.0)
         .min(2.0)
-        .min(ribbons.len() as f32);
+        .min(viewports.len() as f32);
     PanelGeometry {
         scale,
         width: columns * width + (columns - 1.0) * GRID_GAP + PANEL_PAD * 2.0 + SCROLLBAR,
         columns: columns as usize,
     }
-}
-
-// Clip both drawing and hit targets to the viewport, without rescaling partial windows.
-fn viewport_tile(mut tile: Tile, viewport_x: f32, size: (f32, f32)) -> Option<Tile> {
-    let x = tile.x - viewport_x;
-    let right = (x + tile.width).min(size.0);
-    let bottom = (tile.y + tile.height).min(size.1);
-    tile.x = x.max(0.0);
-    tile.y = tile.y.max(0.0);
-    tile.width = right - tile.x;
-    tile.height = bottom - tile.y;
-    (tile.width > 0.0 && tile.height > 0.0).then_some(tile)
 }
 
 pub fn panel(output: Output) -> Div {
@@ -336,8 +213,8 @@ pub fn panel(output: Output) -> Div {
             layouts.update(|current| merge_initial_layouts(current, initial, &live));
         }
     });
-    let ribbons = memo(move || {
-        ribbons(
+    let viewports = memo(move || {
+        viewport::project(
             &niri::workspaces(),
             &niri::windows(),
             &layouts.get(),
@@ -346,13 +223,10 @@ pub fn panel(output: Output) -> Div {
         )
     });
     // Browsing belongs to this panel, not the compositor. Keep it across live card rebuilds.
-    let browse_offsets = signal(HashMap::<u64, f32>::new());
+    let browsing = signal(BrowseState::default());
     let max_panel_w = (size.0 - 48.0).max(280.0).min(1120.0);
     let panel_h = (size.1 - 48.0).max(320.0).min(780.0);
-    let geometry = memo({
-        let ribbons = ribbons.clone();
-        move || panel_geometry(&ribbons.get(), max_panel_w)
-    });
+    let geometry = memo(move || viewports.with(|viewports| panel_geometry(viewports, max_panel_w)));
     div()
         .max_h(panel_h)
         .flex_none()
@@ -399,12 +273,12 @@ pub fn panel(output: Output) -> Div {
                 .overflow_y_scroll()
                 .child(dyn_view(move || {
                     let geometry = geometry.get();
-                    let mut workspaces = ribbons.get().into_iter().peekable();
+                    let mut workspaces = viewports.get().into_iter().peekable();
                     let mut rows = div().flex().flex_col().gap(GRID_GAP).pr(SCROLLBAR);
                     while workspaces.peek().is_some() {
                         let mut row = div().flex().flex_row().gap(GRID_GAP);
-                        for ribbon in workspaces.by_ref().take(geometry.columns) {
-                            row = row.child(workspace_card(ribbon, geometry.scale, browse_offsets));
+                        for viewport in workspaces.by_ref().take(geometry.columns) {
+                            row = row.child(workspace_card(viewport, geometry.scale, browsing));
                         }
                         rows = rows.child(row);
                     }
@@ -431,9 +305,9 @@ pub fn panel(output: Output) -> Div {
         ))
 }
 
-fn workspace_card(ribbon: Ribbon, scale: f32, browse_offsets: Signal<HashMap<u64, f32>>) -> Div {
-    let width = card_width(&ribbon, scale);
-    let workspace = ribbon.workspace.clone();
+fn workspace_card(viewport: WorkspaceViewport, scale: f32, browsing: Signal<BrowseState>) -> Div {
+    let width = card_width(&viewport, scale);
+    let workspace = viewport.workspace.clone();
     let title = workspace
         .name
         .clone()
@@ -444,10 +318,10 @@ fn workspace_card(ribbon: Ribbon, scale: f32, browse_offsets: Signal<HashMap<u64
     let urgent = workspace.is_urgent;
     let count = format!(
         "{} window{}",
-        ribbon.window_count,
-        if ribbon.window_count == 1 { "" } else { "s" }
+        viewport.window_count,
+        if viewport.window_count == 1 { "" } else { "s" }
     );
-    let canvas = workspace_canvas(ribbon, scale, browse_offsets);
+    let canvas = workspace_canvas(viewport, scale, browsing);
     div()
         .w(width)
         .flex_none()
@@ -487,25 +361,13 @@ fn workspace_card(ribbon: Ribbon, scale: f32, browse_offsets: Signal<HashMap<u64
         .child(canvas)
 }
 
-fn workspace_canvas(ribbon: Ribbon, scale: f32, browse_offsets: Signal<HashMap<u64, f32>>) -> Div {
-    let id = ribbon.workspace.id;
-    let size = (ribbon.viewport_width, ribbon.viewport_height);
-    let min_x = ribbon.tiles.iter().map(|tile| tile.x).fold(0.0, f32::min);
-    let max_x = (ribbon
-        .tiles
-        .iter()
-        .map(|tile| tile.x + tile.width)
-        .fold(size.0, f32::max)
-        - size.0)
-        .max(min_x);
-    let viewport_x = memo(move || {
-        browse_offsets.with(|offsets| {
-            offsets
-                .get(&id)
-                .copied()
-                .unwrap_or(ribbon.viewport_x)
-                .clamp(min_x, max_x)
-        })
+fn workspace_canvas(viewport: WorkspaceViewport, scale: f32, browsing: Signal<BrowseState>) -> Div {
+    let size = (viewport.viewport_width, viewport.viewport_height);
+    let viewport = Rc::new(viewport);
+    let scrolling = Rc::clone(&viewport);
+    let position = memo({
+        let viewport = Rc::clone(&viewport);
+        move || browsing.with(|state| state.position(&viewport))
     });
     div()
         .relative()
@@ -520,27 +382,18 @@ fn workspace_canvas(ribbon: Ribbon, scale: f32, browse_offsets: Signal<HashMap<u
             } else {
                 event.delta_y
             };
-            let current = untrack(|| viewport_x.get());
-            let next = (current + delta / scale).clamp(min_x, max_x);
-            if next != current {
-                browse_offsets.update(|offsets| {
-                    offsets.insert(id, next);
-                });
+            if browsing.update_untracked(|state| state.scroll(&scrolling, delta / scale)) {
+                browsing.notify();
             }
-            // Do not scroll the surrounding workspace list, even at a ribbon's boundary.
+            // Do not scroll the surrounding workspace list, even at a viewport's edge.
             event.stop_propagation();
         })
         .child(dyn_view(move || {
-            let x = viewport_x.get();
             let mut content = div().size_full().relative();
-            for tile in &ribbon.tiles {
-                if let Some(tile) = viewport_tile(tile.clone(), x, size) {
-                    let active = tile.window.is_focused
-                        || Some(tile.window.id) == ribbon.workspace.active_window_id;
-                    content = content.child(window_tile(tile, scale, active));
-                }
+            for tile in viewport.visible_windows(position.get()) {
+                content = content.child(window_tile(tile, scale));
             }
-            if ribbon.window_count == 0 {
+            if viewport.window_count == 0 {
                 content = content.child(
                     div()
                         .absolute()
@@ -558,9 +411,10 @@ fn workspace_canvas(ribbon: Ribbon, scale: f32, browse_offsets: Signal<HashMap<u
         }))
 }
 
-fn window_tile(tile: Tile, scale: f32, active: bool) -> Div {
+fn window_tile(tile: VisibleWindow<'_>, scale: f32) -> Div {
     let id = tile.window.id;
     let urgent = tile.window.is_urgent;
+    let active = tile.active;
     let w = tile.width * scale;
     let h = tile.height * scale;
     let title = tile.window.title.clone();
@@ -573,7 +427,7 @@ fn window_tile(tile: Tile, scale: f32, active: bool) -> Div {
         .gap(4.0_f32)
         .p(4.0_f32);
     if w >= 28.0 && h >= 28.0 {
-        content = content.child(window_icon(&tile.window, 22.0));
+        content = content.child(window_icon(tile.window, 22.0));
     }
     if w >= 100.0 && h >= 54.0 {
         content = content.child(
@@ -591,7 +445,11 @@ fn window_tile(tile: Tile, scale: f32, active: bool) -> Div {
             .h(h)
             .rounded(VIEWPORT_RADIUS)
             .overflow_hidden()
-            .border(if active || urgent { CARD_BORDER } else { 0.0_f32 })
+            .border(if active || urgent {
+                CARD_BORDER
+            } else {
+                0.0_f32
+            })
             .child(content)
             .dyn_style(move |s| {
                 let c = colors();
@@ -646,352 +504,4 @@ fn focus_window(id: u64) {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn workspace(id: u64, output: &str) -> Workspace {
-        Workspace {
-            id,
-            idx: id as u32,
-            output: Some(output.to_owned()),
-            is_active: id == 1,
-            active_window_id: Some(3),
-            ..Default::default()
-        }
-    }
-
-    fn window(id: u64, workspace: u64, floating: bool) -> Window {
-        Window {
-            id,
-            workspace_id: Some(workspace),
-            is_floating: floating,
-            ..Default::default()
-        }
-    }
-
-    fn empty_ribbon(idx: u64) -> Ribbon {
-        Ribbon {
-            workspace: workspace(idx, "DP-1"),
-            tiles: Vec::new(),
-            window_count: 0,
-            viewport_x: 0.0,
-            viewport_width: 1600.0,
-            viewport_height: 900.0,
-        }
-    }
-
-    #[test]
-    fn wheel_browsing_is_local_bounded_and_survives_card_rebuilds() {
-        use anti_webui::core::{
-            Ui,
-            event::{Modifiers, ScrollPhase, ScrollSource, WindowEvent},
-            geometry::{PointF, Scale, SizeI},
-        };
-        use std::{cell::Cell, rc::Rc};
-
-        let slots = Cell::new(None);
-        let bubbled = Rc::new(Cell::new(0));
-        let outer_events = bubbled.clone();
-        let mut first = empty_ribbon(1);
-        first.viewport_x = 200.0;
-        first.window_count = 2;
-        first.tiles = vec![
-            Tile {
-                window: window(1, 1, false),
-                x: 0.0,
-                y: 0.0,
-                width: 1600.0,
-                height: 900.0,
-            },
-            Tile {
-                window: window(2, 1, false),
-                x: 1606.0,
-                y: 0.0,
-                width: 1600.0,
-                height: 900.0,
-            },
-        ];
-        let mut ui = Ui::new(|| {
-            let offsets = signal(HashMap::new());
-            let model = signal(first);
-            slots.set(Some((offsets, model)));
-            div()
-                .w(500.0)
-                .h(300.0)
-                .on_scroll(move |_| outer_events.set(outer_events.get() + 1))
-                .child(
-                    div()
-                        .flex()
-                        .flex_row()
-                        .gap(8.0_f32)
-                        .child(dyn_view(move || {
-                            workspace_canvas(model.get(), 0.125, offsets)
-                        }))
-                        .child(workspace_canvas(empty_ribbon(2), 0.125, offsets)),
-                )
-        });
-        ui.handle_event(WindowEvent::Resized {
-            size: SizeI::new(500, 300),
-            scale: Scale::from_f64(1.0),
-        });
-        ui.update();
-        let (offsets, model) = slots.get().unwrap();
-        let scroll = |ui: &mut Ui, x: f32, y: f32, dx: f32, dy: f32| {
-            ui.handle_event(WindowEvent::Scroll {
-                position: PointF::new(x, y),
-                delta_x: dx,
-                delta_y: dy,
-                modifiers: Modifiers::default(),
-                source: ScrollSource::Unknown,
-                phase: ScrollPhase::Single,
-                time: 0,
-            });
-            ui.update();
-        };
-        scroll(&mut ui, 50.0, 50.0, 0.0, 20.0);
-        let browsed = offsets.with(|offsets| offsets[&1]);
-        assert!(browsed > 200.0 && browsed < 1606.0);
-        assert!(!offsets.with(|offsets| offsets.contains_key(&2)));
-        model.update(|ribbon| ribbon.tiles[0].window.title = "Updated".into());
-        ui.update();
-        scroll(&mut ui, 50.0, 50.0, 20.0, 0.0);
-        assert!(offsets.with(|offsets| offsets[&1]) > browsed);
-        scroll(&mut ui, 50.0, 50.0, 0.0, 10000.0);
-        assert_eq!(offsets.with(|offsets| offsets[&1]), 1606.0);
-        scroll(&mut ui, 50.0, 50.0, 0.0, -10000.0);
-        assert_eq!(offsets.with(|offsets| offsets[&1]), 0.0);
-        scroll(&mut ui, 250.0, 50.0, 0.0, 20.0);
-        assert_eq!(bubbled.get(), 0);
-        scroll(&mut ui, 450.0, 250.0, 0.0, 20.0);
-        assert_eq!(bubbled.get(), 1);
-    }
-
-    #[test]
-    fn workspaces_are_ordered_by_index_not_niri_event_order() {
-        let result = ribbons(
-            &[
-                workspace(4, "DP-1"),
-                workspace(1, "DP-1"),
-                workspace(3, "DP-1"),
-            ],
-            &[],
-            &HashMap::new(),
-            "DP-1",
-            (1600.0, 900.0),
-        );
-        assert_eq!(
-            result
-                .iter()
-                .map(|ribbon| ribbon.workspace.idx)
-                .collect::<Vec<_>>(),
-            [1, 3, 4]
-        );
-    }
-
-    #[test]
-    fn viewport_scale_and_panel_size_do_not_depend_on_offscreen_windows() {
-        let pair = [empty_ribbon(1), empty_ribbon(2)];
-        let before = panel_geometry(&pair, 1120.0);
-        let mut populated = pair.clone();
-        populated[0].tiles.push(Tile {
-            window: window(1, 1, false),
-            x: 12000.0,
-            y: 0.0,
-            width: 8000.0,
-            height: 4000.0,
-        });
-        assert_eq!(panel_geometry(&populated, 1120.0), before);
-        assert_eq!(
-            card_width(&pair[0], before.scale),
-            card_width(&populated[0], before.scale)
-        );
-        let narrow = panel_geometry(&populated, 280.0);
-        assert!(narrow.width <= 280.0);
-        assert!(narrow.scale > 0.0 && narrow.scale < before.scale);
-    }
-
-    #[test]
-    fn viewport_clips_partial_windows_and_excludes_outside_hit_targets() {
-        let tile = Tile {
-            window: window(1, 1, true),
-            x: 150.0,
-            y: -50.0,
-            width: 400.0,
-            height: 300.0,
-        };
-        let clipped = viewport_tile(tile.clone(), 200.0, (1600.0, 900.0)).unwrap();
-        assert_eq!(
-            (clipped.x, clipped.y, clipped.width, clipped.height),
-            (0.0, 0.0, 350.0, 250.0)
-        );
-        let bottom_right = Tile {
-            x: 1700.0,
-            y: 800.0,
-            ..tile.clone()
-        };
-        let clipped = viewport_tile(bottom_right, 200.0, (1600.0, 900.0)).unwrap();
-        assert_eq!(
-            (clipped.x, clipped.y, clipped.width, clipped.height),
-            (1500.0, 800.0, 100.0, 100.0)
-        );
-        for (x, y) in [
-            (-200.0, 0.0),
-            (1800.0, 0.0),
-            (200.0, -300.0),
-            (200.0, 900.0),
-        ] {
-            assert!(
-                viewport_tile(
-                    Tile {
-                        x,
-                        y,
-                        ..tile.clone()
-                    },
-                    200.0,
-                    (1600.0, 900.0)
-                )
-                .is_none()
-            );
-        }
-    }
-
-    #[test]
-    fn ribbons_keep_niri_columns_and_their_real_proportions() {
-        let layouts = HashMap::from([
-            (
-                1,
-                Layout {
-                    column: 1,
-                    row: 1,
-                    width: 800.0,
-                    height: 900.0,
-                    view_position: None,
-                },
-            ),
-            (
-                2,
-                Layout {
-                    column: 1,
-                    row: 2,
-                    width: 800.0,
-                    height: 900.0,
-                    view_position: None,
-                },
-            ),
-            (
-                3,
-                Layout {
-                    column: 2,
-                    row: 1,
-                    width: 1000.0,
-                    height: 900.0,
-                    view_position: None,
-                },
-            ),
-            (
-                4,
-                Layout {
-                    column: 0,
-                    row: 0,
-                    width: 400.0,
-                    height: 300.0,
-                    view_position: Some((120.0, 80.0)),
-                },
-            ),
-        ]);
-        let windows = vec![
-            window(1, 1, false),
-            window(2, 1, false),
-            window(3, 1, false),
-            window(4, 1, true),
-            window(5, 2, false),
-        ];
-        let result = ribbons(
-            &[workspace(1, "DP-1"), workspace(2, "DP-2")],
-            &windows,
-            &layouts,
-            "DP-1",
-            (1600.0, 900.0),
-        );
-        assert_eq!(result.len(), 1);
-        let ribbon = &result[0];
-        assert_eq!(ribbon.window_count, 4);
-        assert_eq!(
-            ribbon
-                .tiles
-                .iter()
-                .map(|t| (t.window.id, t.x, t.y, t.width))
-                .collect::<Vec<_>>(),
-            [
-                (1, 0.0, 0.0, 800.0),
-                (2, 0.0, 906.0, 800.0),
-                (3, 806.0, 0.0, 1000.0),
-                (4, 326.0, 80.0, 400.0),
-            ]
-        );
-        assert_eq!(ribbon.viewport_x, 206.0);
-    }
-
-    #[test]
-    fn layout_events_replace_initial_state_and_follow_window_changes() {
-        let initial = json!({"WindowsChanged": {"windows": [
-            {"id": 1, "layout": {"pos_in_scrolling_layout": [1, 1], "tile_size": [800, 900]}},
-            {"id": 2, "layout": {"pos_in_scrolling_layout": [2, 1], "tile_size": [800, 900]}}
-        ]}});
-        let mut layouts = HashMap::new();
-        apply_layout_event(&mut layouts, &initial);
-        assert_eq!(layouts.len(), 2);
-        apply_layout_event(
-            &mut layouts,
-            &json!({"WindowLayoutsChanged": {"changes": [
-                [1, {"pos_in_scrolling_layout": [3, 2], "tile_size": [640, 480]}]
-            ]}}),
-        );
-        assert_eq!(layouts[&1].column, 3);
-        assert_eq!(layouts[&1].height, 480.0);
-        apply_layout_event(
-            &mut layouts,
-            &json!({"WindowOpenedOrChanged": {"window": {"id": 2, "is_floating": true}}}),
-        );
-        apply_layout_event(&mut layouts, &json!({"WindowClosed": {"id": 1}}));
-        assert!(layouts.is_empty());
-    }
-
-    #[test]
-    fn floating_layout_events_keep_compositor_positions() {
-        let mut layouts = HashMap::new();
-        apply_layout_event(
-            &mut layouts,
-            &json!({"WindowOpenedOrChanged": {"window": {
-                "id": 7,
-                "is_floating": true,
-                "layout": {
-                    "pos_in_scrolling_layout": null,
-                    "tile_size": [400, 300],
-                    "tile_pos_in_workspace_view": [120, 80]
-                }
-            }}}),
-        );
-        assert_eq!(layouts[&7].view_position, Some((120.0, 80.0)));
-        assert_eq!((layouts[&7].width, layouts[&7].height), (400.0, 300.0));
-    }
-
-    #[test]
-    fn initial_response_does_not_replace_newer_events_or_closed_windows() {
-        let old = Layout {
-            column: 1,
-            row: 1,
-            width: 800.0,
-            height: 900.0,
-            view_position: None,
-        };
-        let new = Layout { column: 3, ..old };
-        let mut current = HashMap::from([(1, new), (2, old)]);
-        merge_initial_layouts(
-            &mut current,
-            HashMap::from([(1, old), (3, old)]),
-            &HashSet::from([1, 3]),
-        );
-        assert_eq!(current, HashMap::from([(1, new), (3, old)]));
-    }
-}
+mod tests;
