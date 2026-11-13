@@ -10,6 +10,7 @@ use std::rc::Rc;
 pub(crate) struct State {
     pub caffeine: Signal<bool>,
     pub inhibitors: Signal<usize>,
+    pub media_playing: Signal<bool>,
     pub warning: Signal<bool>,
     pub error: Signal<String>,
     pub installed: Signal<bool>,
@@ -20,6 +21,7 @@ pub(crate) struct State {
 thread_local! {
     static STATE: State = create_root(|| State {
         caffeine: signal(false), inhibitors: signal(0), warning: signal(false),
+        media_playing: signal(false),
         error: signal(String::new()), installed: signal(false),
         sleep_delay: signal(false), screensaver: signal(false),
     }).0;
@@ -57,6 +59,8 @@ pub fn status_text() -> String {
     }
     let mut base: String = if s.caffeine.get() {
         "Caffeine on · automatic idle actions paused".into()
+    } else if s.media_playing.get() {
+        "Media playing · automatic idle actions paused".into()
     } else if s.inhibitors.get() > 0 {
         format!("Paused by {} application inhibitor(s)", s.inhibitors.get())
     } else if s.warning.get() {
@@ -127,6 +131,19 @@ pub fn install() {
     effect(move || {
         let _ = lock_state();
         locked.send(Message::LockChanged);
+    });
+    let media = anti_webui::shell::media();
+    let playing = memo(move || {
+        media
+            .players()
+            .iter()
+            .any(|player| player.status == anti_webui::shell::PlaybackStatus::Playing)
+    });
+    let playback = sender.clone();
+    effect(move || {
+        let playing = playing.get();
+        state().media_playing.set(playing);
+        playback.send(Message::MediaPlaying(playing));
     });
     anti_webui::shell::session()
         .on_prepare_for_sleep(move |sleeping| sender.send(Message::SystemSleep(sleeping)));

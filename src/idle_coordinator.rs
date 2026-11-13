@@ -24,6 +24,7 @@ pub(crate) enum Event {
     Bus(BusEvent),
     SystemSleep(bool),
     Caffeine(bool),
+    MediaPlaying(bool),
     Suspend,
     Cancel,
     LockTimeout(u64),
@@ -125,6 +126,7 @@ pub(crate) struct Coordinator {
     external_sleep: Option<u64>,
     system_sleeping: bool,
     caffeine: bool,
+    media_playing: bool,
     inhibitors: usize,
 }
 
@@ -142,6 +144,7 @@ impl Coordinator {
             external_sleep: None,
             system_sleeping: false,
             caffeine: false,
+            media_playing: false,
             inhibitors: 0,
         }
     }
@@ -208,7 +211,13 @@ impl Coordinator {
                 self.caffeine = enabled;
                 output.caffeine = Some(enabled);
                 output.command(Command::Caffeine(enabled));
-                self.policy.inhibit(enabled || self.inhibitors > 0)
+                self.policy
+                    .inhibit(enabled || self.media_playing || self.inhibitors > 0)
+            }
+            Event::MediaPlaying(playing) => {
+                self.media_playing = playing;
+                self.policy
+                    .inhibit(self.caffeine || playing || self.inhibitors > 0)
             }
             Event::Suspend => {
                 if !self.suspend_in_flight
@@ -372,7 +381,8 @@ impl Coordinator {
             BusEvent::Inhibitors(count) => {
                 self.inhibitors = count;
                 output.inhibitors = Some(count);
-                self.policy.inhibit(self.caffeine || count > 0)
+                self.policy
+                    .inhibit(self.caffeine || self.media_playing || count > 0)
             }
             BusEvent::Caffeine(result) => {
                 if let Err(error) = result {

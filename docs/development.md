@@ -47,7 +47,7 @@ shoji-bar-4 preview quick-settings right.png --bar-position right --scale 1
 
 ## Idle and lock lifecycle tests
 
-`src/idle_coordinator.rs` owns sequencing across inactivity, lock acknowledgement, sleep and recovery. `src/idle_runtime.rs` supplies two adapters behind that seam: the AntiWebUI/Wayland/logind desktop implementation and the scenario implementation in `src/idle_runtime/tests.rs`. Tests drive the shared runtime through input events and assert platform observations; they do not inspect the internal rule policy. This covers activity during lock waits, refusal, stale deadlines and sleep-delay release without touching the session.
+`src/idle_coordinator.rs` owns sequencing across inactivity, lock acknowledgement, sleep and recovery. `src/idle_runtime.rs` supplies two adapters behind that seam: the AntiWebUI/Wayland/logind desktop implementation and the scenario implementation in `src/idle_runtime/tests.rs`. Tests drive the shared runtime through input events and assert platform observations; they do not inspect the internal rule policy. This covers activity or media playback during lock waits, fresh countdowns after playback, independent media/Caffeine/application inhibition, explicit Sleep during playback, refusal, stale deadlines and sleep-delay release without touching the session.
 
 `src/display_power.rs` owns ordered screen-power requests, cancellation and shutdown restoration. Its tests use a worker-controlled adapter, plus a socket-backed compositor for the Niri protocol and saturated-backlog cases. `src/lock.rs` owns sleep holds, PAM answer generations and unlock suppression; tests exercise that lifecycle without opening compositor surfaces.
 

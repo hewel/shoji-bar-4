@@ -98,6 +98,71 @@ fn has(runtime: &Runtime<Scenario>, expected: Observation) -> bool {
 }
 
 #[test]
+fn media_playback_cancels_pending_sleep_and_restarts_a_full_countdown() {
+    let (mut runtime, index, token) = scenario(IdleAction::LockAndSuspend, 0);
+    runtime.activity(index, token, true);
+    assert!(has(&runtime, Observation::Lock));
+    runtime.input(Event::MediaPlaying(true));
+    runtime.lock_changed(LockState::Locked);
+    assert!(!has(&runtime, Observation::Suspend));
+    assert!(runtime.sleep_hold.is_none());
+
+    runtime.platform.observations.clear();
+    runtime.input(Event::MediaPlaying(false));
+    let fresh = runtime.platform.observations.iter().find_map(|observation| match observation {
+        Observation::Watch { index: i, token, seconds: 10 } if *i == index => Some(*token),
+        _ => None,
+    }).expect("stopping playback starts the complete idle timeout");
+    assert_ne!(fresh, token);
+    runtime.activity(index, token, true);
+    assert!(!has(&runtime, Observation::Suspend));
+    runtime.activity(index, fresh, true);
+    assert!(has(&runtime, Observation::Suspend));
+}
+
+#[test]
+fn media_caffeine_and_application_inhibitors_release_independently() {
+    let (mut runtime, index, token) = scenario(IdleAction::LockAndSuspend, 0);
+    runtime.input(Event::MediaPlaying(true));
+    runtime.input(Event::Caffeine(true));
+    runtime.input(Event::Bus(crate::idle_bus::Event::Inhibitors(1)));
+    runtime.input(Event::Caffeine(false));
+    runtime.input(Event::Bus(crate::idle_bus::Event::Inhibitors(0)));
+    runtime.platform.observations.clear();
+    runtime.activity(index, token, true);
+    assert!(!has(&runtime, Observation::Lock));
+    assert!(!has(&runtime, Observation::Suspend));
+    assert!(!runtime.platform.observations.iter().any(|o| matches!(o, Observation::Watch { .. })));
+
+    // Explicit Sleep is not an idle action and remains available while music plays.
+    runtime.lock_changed(LockState::Locked);
+    runtime.input(Event::Suspend);
+    assert!(has(&runtime, Observation::Suspend));
+}
+
+#[test]
+fn stopping_media_does_not_release_caffeine_or_application_inhibition() {
+    for application in [false, true] {
+        let (mut runtime, _, _) = scenario(IdleAction::LockAndSuspend, 0);
+        runtime.input(Event::MediaPlaying(true));
+        runtime.input(if application {
+            Event::Bus(crate::idle_bus::Event::Inhibitors(1))
+        } else {
+            Event::Caffeine(true)
+        });
+        runtime.platform.observations.clear();
+        runtime.input(Event::MediaPlaying(false));
+        assert!(!runtime.platform.observations.iter().any(|o| matches!(o, Observation::Watch { .. })));
+        runtime.input(if application {
+            Event::Bus(crate::idle_bus::Event::Inhibitors(0))
+        } else {
+            Event::Caffeine(false)
+        });
+        assert!(runtime.platform.observations.iter().any(|o| matches!(o, Observation::Watch { seconds: 10, .. })));
+    }
+}
+
+#[test]
 fn activity_before_admission_cancels_lock_and_sleep_without_unlock_gap() {
     let (mut runtime, index, token) = scenario(IdleAction::LockAndSuspend, 0);
     runtime.activity( index, token, true);

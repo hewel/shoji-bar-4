@@ -80,7 +80,7 @@ Wallpapers to choose from are read from `~/Pictures/wallpapers`.
 
 ## Configuring idle actions
 
-Open **Quick Settings → Settings → Idle & sleep** and press **Apply** after editing. The `idle` object is persisted with the other settings. Invalid policy input is rejected as a whole; an invalid policy loaded from disk falls back to disabled defaults.
+Open **Quick Settings → Settings → Idle & sleep**. Each action has a switch and a timer summary; its edit button opens the timer, with **More options** for action type, name, locked-screen timing and commands. **Advanced** contains warning duration, custom-action creation and service status. Press **Apply** after editing. The `idle` object is persisted with the other settings. Invalid policy input is rejected as a whole; an invalid policy loaded from disk falls back to disabled defaults.
 
 `idle configure` replaces the entire policy, not just one rule. For example, this enables only a ten-minute lock with a two-second warning:
 
@@ -102,6 +102,8 @@ shoji-bar-4 msg idle configure '{"pre_action_fade_seconds":2,"behaviors":[{"name
 | `resume_command` | Optional command after activity/wake or policy cancellation, only if the action ran |
 
 Screen power requires `NIRI_SOCKET` and a compatible compositor. Custom commands are not sandboxed; review them before enabling. Cancellation prevents queued, not-yet-admitted commands from starting but does not terminate a command already admitted. Caffeine does not bypass locking for explicit or external sleep requests. Integration failures appear in `idle status` and the Idle page; if the session/system bus restarts or another screensaver service releases its name, restart Shoji to re-establish that integration.
+
+Any MPRIS player reporting Playing pauses Shoji's automatic idle actions, including lock, screen-off and suspend. Countdown timers restart when the last playing player pauses, stops or exits; Caffeine and application inhibitors remain independent. This does not block manual or external sleep, and players that do not expose MPRIS still need an application inhibitor or the Caffeine switch.
 
 Safe offscreen previews (no idle actions):
 
