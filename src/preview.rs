@@ -116,6 +116,9 @@ pub fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         }
         crate::settings::settings().update(|s| s.bar_position = bar_position);
         crate::theme::install();
+        if part == "clipboard" {
+            crate::clipboard_service::install(false);
+        }
         let backdrop = div()
             .size_full()
             .bg(rgb(if light { 0xc8d0d8 } else { 0x30343a }));

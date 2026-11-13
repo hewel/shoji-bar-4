@@ -73,6 +73,7 @@ impl Panel {
 /// A panel invocation on one output. Media carries its invoking island's centre.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Invocation {
+    serial: u64,
     output: String,
     panel: Panel,
     anchor: Option<AnchorPoint>,
@@ -83,6 +84,7 @@ type Open = Signal<Option<Invocation>>;
 
 thread_local! {
     static OPEN: Cell<Option<Open>> = const { Cell::new(None) };
+    static NEXT_INVOCATION: Cell<u64> = const { Cell::new(1) };
 }
 
 fn state() -> Open {
@@ -92,7 +94,8 @@ fn state() -> Open {
                 let s = signal(None::<Invocation>);
                 effect(move || {
                     if !Panel::Launcher.enabled()
-                        && s.get_untracked().is_some_and(|o| o.panel == Panel::Launcher)
+                        && s.get_untracked()
+                            .is_some_and(|o| o.panel == Panel::Launcher)
                     {
                         s.set(None);
                     }
@@ -120,12 +123,25 @@ pub fn toggle_at(output: &Output, panel: Panel, anchor: AnchorPoint) {
     toggle_with(output, panel, Some(anchor));
 }
 
+fn next_invocation() -> u64 {
+    NEXT_INVOCATION.with(|next| {
+        let serial = next.get();
+        next.set(
+            serial
+                .checked_add(1)
+                .expect("panel invocation IDs exhausted"),
+        );
+        serial
+    })
+}
+
 fn toggle_with(output: &Output, panel: Panel, anchor: Option<AnchorPoint>) {
     if !panel.enabled() {
         return;
     }
     let now = is_open(output, panel);
     state().set((!now).then(|| Invocation {
+        serial: next_invocation(),
         output: output.name.clone(),
         panel,
         anchor,
@@ -137,6 +153,7 @@ pub fn open(output_name: &str, panel: Panel) {
         return;
     }
     state().set(Some(Invocation {
+        serial: next_invocation(),
         output: output_name.to_owned(),
         panel,
         anchor: None,
@@ -145,6 +162,13 @@ pub fn open(output_name: &str, panel: Panel) {
 
 pub fn close() {
     state().set(None);
+}
+
+/// Close only the exact logical opening, not a replacement on the same output.
+pub(crate) fn close_invocation(invocation: &Invocation) {
+    if state().with_untracked(|open| open.as_ref() == Some(invocation)) {
+        close();
+    }
 }
 
 /// Whether anything is open, and where.
@@ -309,6 +333,30 @@ pub(crate) fn surface_at(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn replacement_invocation_cannot_be_closed_by_an_old_opening() {
+        let ((), owner) = create_root(|| {
+            let output = Output {
+                name: "DP-1".into(),
+                ..Default::default()
+            };
+            open(&output.name, Panel::Clipboard);
+            let current = invocation(&output, Panel::Clipboard);
+            let old = current.get().unwrap();
+            batch(|| {
+                close();
+                open(&output.name, Panel::Clipboard);
+            });
+            let replacement = current.get().unwrap();
+            assert_ne!(old, replacement);
+            close_invocation(&old);
+            assert!(is_open(&output, Panel::Clipboard));
+            close_invocation(&replacement);
+            assert_eq!(super::current(), None);
+        });
+        owner.dispose();
+    }
 
     #[test]
     fn media_anchor_belongs_to_its_invocation() {

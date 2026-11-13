@@ -81,15 +81,21 @@ It opens under the top bar's now-playing island, or beside it on a vertical bar.
 
 ## Clipboard history
 
-What cliphist remembers, newest first, in the middle of the screen.
+Native Wayland clipboard capture runs for the whole shell session, independently of whether the panel is open. The panel updates immediately when new content arrives, with pinned entries first and recent history below.
 
 - **Entries**: text shows an icon (text, link or path) and its first two lines; images show a thumbnail and their size.
 - **Search** narrows the list; `png` or `image` finds images.
 - **Choosing**: ↑↓ (and PageUp, PageDown) move a highlight that stretches as it goes, and the list springs to keep it in view.
-- **Copying**: Enter or a click puts the entry back on the clipboard and closes the list.
+- **Copying**: Enter or a click serves the original bytes and compatible MIME types directly through Wayland; only the panel invocation that requested the copy closes after success. Dismissing or reopening the panel prevents an old completion from closing the new invocation or replacing its error. Errors remain visible.
+- **Pinning**: the pin button keeps an entry at the front and protects it from automatic eviction. Unpinning returns it to recent history.
 - **Forgetting**: Delete (Shift+Delete while searching) or × forgets an entry; its row closes and the ones below move up.
-- **Opening**: the rows drop in one after another.
-- **Requirement**: cliphist has to be recording, with `wl-paste --watch cliphist store`. ShojiWM's default config starts that.
+- **Opening**: the rows drop in one after another. New captures preserve the selected entry while you browse.
+- **Retention**: up to 100 entries and 256 MiB, including pins; individual text entries are limited to 4 MiB and images to 32 MiB. Repeated content is deduplicated. Blank text, invalid images and entries advertising `x-kde-passwordManagerHint` are excluded.
+- **Text formats**: UTF-8 plain text accepts both `text/plain;charset=utf-8` and `text/plain; charset=utf-8`. Legacy `STRING` is displayed and searched as Latin-1; copying preserves its original bytes and never relabels non-ASCII Latin-1 as UTF-8.
+- **Persistence**: history is authenticated and encrypted under `$XDG_STATE_HOME/shoji-bar-4/clipboard` (normally `~/.local/state/shoji-bar-4/clipboard`), with its key in Secret Service. A locked, missing or unavailable keyring leaves history in memory only, with a visible status; there is no plaintext fallback. Restart the shell after unlocking the keyring to enable persistence.
+- **Images**: thumbnails decode from shared memory, without plaintext image-cache files.
+- **Content ownership**: the shell can re-offer the last supported, complete, non-sensitive selection when its source application exits. A newer selection always supersedes that backup.
+- **Requirement**: the compositor must support `ext-data-control-v1` (preferred) or `wlr-data-control`. No `cliphist`, `wl-paste` watcher or `wl-copy` process is needed. Existing cliphist records are neither imported nor deleted.
 
 ## Lock screen
 

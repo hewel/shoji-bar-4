@@ -20,6 +20,12 @@ The geometric arrangement implied by a bar position: its main axis, thickness, c
 **Panel**:
 A transient shell surface such as Quick Settings, Calendar, Media, Launcher, Clipboard or Power.
 
+**Panel invocation**:
+One logical opening of a panel on an output, ending when it is dismissed or replaced. Its closing animation may outlive it.
+
+**Clipboard payload**:
+The original bytes of a clipboard selection together with their advertised format and encoding.
+
 **Workspace viewport**:
 The browsable region in Overview that represents one workspace's windows at the proportions of the output's screen. It is neither the entire workspace nor the surrounding card with its heading.
 

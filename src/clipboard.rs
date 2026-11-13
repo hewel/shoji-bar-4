@@ -1,8 +1,9 @@
-//! The clipboard's history, as cliphist keeps it: a search field over what was copied, newest
-//! first, the pictures as small copies of themselves. Arrows move the choice, Enter or a click puts
-//! it back on the clipboard, Delete forgets it (Shift+Delete while searching), Escape closes.
-//! Pictures are shown as thumbnails and copied back as their original encoded bytes and MIME type.
+//! Native clipboard history: live search, text and image previews, pinning and keyboard selection.
+//! The session-owned clipboard_service captures and persists entries independently of this panel.
 
+pub(crate) mod copy;
+
+use crate::clipboard_service::{self, Payload};
 use crate::panels::close;
 use crate::theme::{TextStyle, colors, elevation};
 use crate::ui::*;
@@ -11,14 +12,8 @@ use anti_webui::shell::prelude::*;
 use anti_webui_md3e::components::sized_icon;
 use anti_webui_md3e::icons::{self, Symbol};
 use anti_webui_md3e::motion::{default_spatial, fast_spatial};
-use image::ImageDecoder;
-use std::cell::{Cell, RefCell};
-use std::collections::HashSet;
-use std::io::BufReader;
-use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::cell::{Cell, OnceCell, RefCell};
 use std::rc::Rc;
-use std::sync::mpsc;
 use std::time::Duration;
 
 const WIDTH: f32 = 560.0;
@@ -35,15 +30,19 @@ const SHOWN: usize = 100;
 /// How many entries come in one after another when it opens; the rest come with the last.
 const STAGGERED: usize = 9;
 
-/// Something cliphist kept.
 #[derive(Clone, Debug, PartialEq)]
 struct Entry {
-    /// The line cliphist listed it as, which is how it is asked for again.
-    line: String,
     id: u64,
-    /// The start of the text, or what cliphist says of a picture.
+    payload: Payload,
+    view: Rc<EntryView>,
+    pinned: bool,
+}
+
+#[derive(Debug, PartialEq)]
+struct EntryView {
     preview: String,
     picture: Option<Picture>,
+    search: OnceCell<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -54,79 +53,86 @@ struct Picture {
     size: String,
 }
 
-fn supported_format(format: image::ImageFormat) -> bool {
-    use image::ImageFormat as F;
-    matches!(
-        format,
-        F::Png | F::Jpeg | F::Gif | F::WebP | F::Bmp | F::Tiff
-    )
-}
-
 impl Entry {
-    fn parse(line: &str) -> Option<Self> {
-        let (id, preview) = line.split_once('\t')?;
-        Some(Self {
-            line: line.to_owned(),
-            id: id.parse().ok()?,
-            preview: preview.trim().to_owned(),
-            picture: Picture::parse(preview),
-        })
+    fn new(entry: &clipboard_service::Entry) -> Self {
+        let picture = entry.payload.image_info().map(|info| Picture {
+            format: info.format,
+            width: info.width,
+            height: info.height,
+            size: picture_size(entry.payload.bytes.len() as u64),
+        });
+        let preview = if picture.is_none() {
+            entry.payload.text_preview(600)
+        } else {
+            String::new()
+        };
+        Self {
+            id: entry.id,
+            payload: entry.payload.clone(),
+            view: Rc::new(EntryView {
+                preview,
+                picture,
+                search: OnceCell::new(),
+            }),
+            pinned: entry.pinned,
+        }
+    }
+
+    /// The history keeps bytes immutable for an ID. Keep only the current panel
+    /// snapshot, reusing its interpretation across pin/reorder/delete updates.
+    fn refresh(
+        previous: &mut Rc<Vec<Self>>,
+        entries: &[clipboard_service::Entry],
+    ) -> Rc<Vec<Self>> {
+        let next = Rc::new(
+            entries
+                .iter()
+                .map(|entry| {
+                    if let Some(old) = previous.iter().find(|old| {
+                        old.id == entry.id
+                            && old.payload.mime == entry.payload.mime
+                            && std::sync::Arc::ptr_eq(&old.payload.bytes, &entry.payload.bytes)
+                    }) {
+                        Self {
+                            pinned: entry.pinned,
+                            ..old.clone()
+                        }
+                    } else {
+                        Self::new(entry)
+                    }
+                })
+                .collect::<Vec<_>>(),
+        );
+        *previous = next.clone();
+        next
     }
 
     fn height(&self) -> f32 {
-        if self.picture.is_some() {
+        if self.view.picture.is_some() {
             PICTURE_H
         } else {
             TEXT_H
         }
     }
 
-    /// Whether a search finds it: in its text, or a picture by its format.
+    /// Whether a normalized search finds its text, or a picture by its format.
     fn matches(&self, query: &str) -> bool {
-        let query = query.trim().to_lowercase();
         query.is_empty()
-            || match &self.picture {
+            || match &self.view.picture {
                 Some(p) => {
-                    p.format.extensions_str().iter().any(|f| f.contains(&query))
-                        || "image".contains(&query)
+                    p.format.extensions_str().iter().any(|f| f.contains(query))
+                        || "image".contains(query)
                 }
-                None => self.preview.to_lowercase().contains(&query),
+                None => self
+                    .view
+                    .search
+                    .get_or_init(|| self.payload.search_text())
+                    .contains(query),
             }
-    }
-
-    /// Where the small copy of its picture goes.
-    fn picture_path(&self) -> Option<PathBuf> {
-        let p = self.picture.as_ref()?;
-        Some(pictures_dir().join(format!("{}.{}", self.id, p.format.extensions_str()[0])))
     }
 }
 
 impl Picture {
-    /// What cliphist lists a picture as: `[[ binary data 48 KiB png 316x192 ]]`.
-    fn parse(preview: &str) -> Option<Self> {
-        let rest = preview
-            .trim()
-            .strip_prefix("[[ binary data ")?
-            .strip_suffix("]]")?;
-        let mut words = rest.split_whitespace();
-        let size = format!("{} {}", words.next()?, words.next()?);
-        let format = image::ImageFormat::from_extension(words.next()?)?;
-        if !supported_format(format) {
-            return None;
-        }
-        let (width, height) = words.next()?.split_once('x')?;
-        let (width, height) = (width.parse().ok()?, height.parse().ok()?);
-        if width == 0 || height == 0 {
-            return None;
-        }
-        Some(Self {
-            format,
-            width,
-            height,
-            size,
-        })
-    }
-
     fn describe(&self) -> String {
         format!(
             "{} · {} × {} · {}",
@@ -138,28 +144,7 @@ impl Picture {
     }
 }
 
-/// Reads a picture's real format and dimensions without decoding its full-size pixels.
-fn picture_from_file(path: &Path) -> Option<Picture> {
-    let file = std::fs::File::open(path).ok()?;
-    let bytes = file.metadata().ok()?.len();
-    let reader = image::ImageReader::new(BufReader::new(file))
-        .with_guessed_format()
-        .ok()?;
-    let format = reader.format().filter(|f| supported_format(*f))?;
-    let decoder = reader.into_decoder().ok()?;
-    let (width, height) = decoder.dimensions();
-    if width == 0 || height == 0 {
-        return None;
-    }
-    Some(Picture {
-        format,
-        width,
-        height,
-        size: picture_size(bytes),
-    })
-}
-
-/// cliphist 0.7's byte descriptions: binary units, rounded to integers.
+/// Binary units, rounded for the compact image subtitle.
 fn picture_size(bytes: u64) -> String {
     const UNITS: [&str; 3] = ["B", "KiB", "MiB"];
     let mut value = bytes as f64;
@@ -169,181 +154,6 @@ fn picture_size(bytes: u64) -> String {
         unit += 1;
     }
     format!("{value:.0} {}", UNITS[unit])
-}
-
-fn needs_picture_probe(preview: &str) -> bool {
-    preview.chars().any(|c| c == '\u{fffd}' || c.is_control())
-}
-
-/// Probes only entries whose lossy previews can contain unrecognised binary data.
-fn probe_picture(entry: &mut Entry) {
-    if entry.picture.is_some() || !needs_picture_probe(&entry.preview) {
-        return;
-    }
-    let Ok(file) = decoded_file(&entry.line, &pictures_dir()) else {
-        return;
-    };
-    let Some(picture) = picture_from_file(file.path()) else {
-        return;
-    };
-    entry.picture = Some(picture);
-    if let Some(path) = entry.picture_path() {
-        // The writer can retry the same entry if publishing this confirmed picture fails.
-        let _ = file.persist(path);
-    }
-}
-
-thread_local! {
-    /// What was listed the last time, shown at once the next time while cliphist is asked again.
-    static LAST: RefCell<Vec<Entry>> = const { RefCell::new(Vec::new()) };
-}
-
-/// Where pictures are written out for their small copies; they last until the session ends.
-fn pictures_dir() -> PathBuf {
-    std::env::var_os("XDG_RUNTIME_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir)
-        .join("shoji-bar-4-clipboard")
-}
-
-/// Asks cliphist for what it has, off this thread. `None` when it couldn't.
-fn load(done: impl Fn(Option<Vec<Entry>>) + 'static) {
-    let to_ui = ui_channel(done);
-    let _ = std::thread::Builder::new()
-        .name("shoji-bar-4 cliphist".into())
-        .spawn(move || {
-            let listed = Command::new("cliphist")
-                .args(["-preview-width", "300", "list"])
-                .stderr(Stdio::null())
-                .output()
-                .ok()
-                .filter(|o| o.status.success())
-                .map(|o| {
-                    let mut entries: Vec<Entry> = String::from_utf8_lossy(&o.stdout)
-                        .lines()
-                        .filter_map(Entry::parse)
-                        .collect();
-                    for entry in &mut entries {
-                        probe_picture(entry);
-                    }
-                    entries
-                });
-            to_ui.send(listed);
-        });
-}
-
-/// Writes pictures out, one after another off this thread, and says which are there. It stops
-/// when what it returns goes.
-fn picture_writer(written: Signal<HashSet<u64>>) -> mpsc::Sender<Entry> {
-    let (tx, rx) = mpsc::channel::<Entry>();
-    let to_ui = ui_channel(move |id: u64| written.update(|w| _ = w.insert(id)));
-    let _ = std::thread::Builder::new()
-        .name("shoji-bar-4 pictures".into())
-        .spawn(move || {
-            let _ = std::fs::create_dir_all(pictures_dir());
-            for entry in rx {
-                let Some(path) = entry.picture_path() else {
-                    continue;
-                };
-                if path.exists() || decode(&entry.line, &path).is_ok() {
-                    to_ui.send(entry.id);
-                }
-            }
-        });
-    tx
-}
-
-/// exec arguments cannot contain NUL; cliphist also accepts the entry's numeric id directly.
-fn cliphist_selector(line: &str) -> &str {
-    if line.as_bytes().contains(&0) {
-        line.split('\t').next().unwrap_or(line)
-    } else {
-        line
-    }
-}
-
-/// Extracts the original cliphist bytes into a unique temporary file.
-fn decoded_file(line: &str, directory: &Path) -> std::io::Result<tempfile::NamedTempFile> {
-    std::fs::create_dir_all(directory)?;
-    let file = tempfile::NamedTempFile::new_in(directory)?;
-    let status = Command::new("cliphist")
-        .arg("decode")
-        .arg(cliphist_selector(line))
-        .stdin(Stdio::null())
-        .stdout(file.reopen()?)
-        .stderr(Stdio::null())
-        .status()?;
-    if status.success() {
-        Ok(file)
-    } else {
-        Err(std::io::Error::other("cliphist decode failed"))
-    }
-}
-
-/// `cliphist decode` into a file, which is only there once it is whole.
-fn decode(line: &str, to: &Path) -> std::io::Result<()> {
-    let directory = to.parent().unwrap_or_else(|| Path::new("."));
-    decoded_file(line, directory)?
-        .persist(to)
-        .map(|_| ())
-        .map_err(|e| e.error)
-}
-
-/// Runs a shell script with `line` as `$1`, off this thread.
-fn run(script: &'static str, line: String) {
-    let _ = std::thread::Builder::new()
-        .name("shoji-bar-4 cliphist".into())
-        .spawn(move || {
-            let _ = Command::new("sh")
-                .args(["-c", script, "sh", cliphist_selector(&line)])
-                .stdin(Stdio::null())
-                .status();
-        });
-}
-
-/// Puts it on the clipboard again; cliphist then lists it first.
-fn copy(entry: &Entry) {
-    if let Some(picture) = &entry.picture {
-        let line = entry.line.clone();
-        let format = picture.format;
-        let _ = std::thread::Builder::new()
-            .name("shoji-bar-4 clipboard copy".into())
-            .spawn(move || {
-                let result = decoded_file(&line, &pictures_dir()).and_then(|file| {
-                    let mut child = Command::new("wl-copy")
-                        .arg("--type")
-                        .arg(format.to_mime_type())
-                        .stdin(file.reopen()?)
-                        .stdout(Stdio::null())
-                        .stderr(Stdio::null())
-                        .spawn()?;
-                    if child.wait()?.success() {
-                        Ok(())
-                    } else {
-                        Err(std::io::Error::other("wl-copy failed"))
-                    }
-                });
-                if let Err(error) = result {
-                    eprintln!("shoji-bar-4: clipboard copy failed: {error}");
-                }
-            });
-        return;
-    }
-    run(
-        r#"printf '%s\n' "$1" | cliphist decode | wl-copy"#,
-        entry.line.clone(),
-    );
-}
-
-/// Has cliphist forget it.
-fn forget(entry: &Entry) {
-    run(
-        r#"printf '%s\n' "$1" | cliphist delete"#,
-        entry.line.clone(),
-    );
-    if let Some(path) = entry.picture_path() {
-        let _ = std::fs::remove_file(path);
-    }
 }
 
 /// What `f` says of the list, without depending on it.
@@ -359,24 +169,18 @@ fn spot(list: &[Entry], index: usize) -> Option<(f32, f32)> {
 }
 
 pub fn panel(output: Output) -> Div {
-    let _ = output;
-    let entries = signal(LAST.with(|l| l.borrow().clone()));
-    let loaded = signal(false);
-    let failed = signal(false);
-    load(move |listed| {
-        loaded.set(true);
-        match listed {
-            Some(list) => {
-                LAST.with(|l| *l.borrow_mut() = list.clone());
-                entries.set(list);
-            }
-            None => failed.set(true),
-        }
+    let copy = copy::Copy::new(&output);
+    let state = clipboard_service::state();
+    let previous_entries = RefCell::new(Rc::new(Vec::new()));
+    let entries = memo(move || {
+        state
+            .entries
+            .with(|entries| Entry::refresh(&mut previous_entries.borrow_mut(), entries))
     });
     let query = signal(String::new());
     let picked = signal(0usize);
     let results = memo(move || {
-        let query = query.get();
+        let query = query.with(|query| query.trim().to_lowercase());
         entries.with(|all| {
             all.iter()
                 .filter(|e| e.matches(&query))
@@ -385,8 +189,6 @@ pub fn panel(output: Output) -> Div {
                 .collect::<Vec<_>>()
         })
     });
-    let written = signal(HashSet::new());
-    let writer = Rc::new(picture_writer(written));
 
     let list = node_ref();
     // The list's scrolling while the choice is followed by keys; the wheel scrolls it as it is.
@@ -426,18 +228,30 @@ pub fn panel(output: Output) -> Div {
             reveal(to);
         }
     };
-    let choose = move |entry: &Entry| {
-        copy(entry);
-        close();
-    };
-    let drop_entry = move |entry: &Entry| {
-        forget(entry);
-        let id = entry.id;
-        entries.update(|all| all.retain(|e| e.id != id));
-        LAST.with(|l| l.borrow_mut().retain(|e| e.id != id));
-        let n = untrack_with(results, Vec::len);
-        picked.update(|p| *p = (*p).min(n.saturating_sub(1)));
-    };
+    let previous = RefCell::new((String::new(), Vec::<u64>::new()));
+    effect(move || {
+        let query = query.get();
+        let mut previous = previous.borrow_mut();
+        let old_index = picked.get_untracked();
+        results.with(|rows| {
+            // New captures must not change the entry an already-browsing user
+            // will copy with Enter. A changed search still starts at the top.
+            let selected = (previous.0 == query)
+                .then(|| previous.1.get(old_index).copied())
+                .flatten();
+            let next = selected
+                .and_then(|id| rows.iter().position(|entry| entry.id == id))
+                .unwrap_or_else(|| old_index.min(rows.len().saturating_sub(1)));
+            previous.0 = query;
+            previous.1.clear();
+            previous.1.extend(rows.iter().map(|entry| entry.id));
+            if next != old_index {
+                picked.set(next);
+            }
+        });
+    });
+    let choose = move |entry: &Entry| copy.choose(entry.id);
+    let drop_entry = move |entry: &Entry| copy.remove(entry.id);
     let picked_entry = move || untrack_with(results, |r| r.get(picked.get_untracked()).cloned());
 
     let input = node_ref();
@@ -538,14 +352,11 @@ pub fn panel(output: Output) -> Div {
         .child(
             for_each(
                 move || results.get(),
-                |e| (e.id, e.picture.as_ref().map(|p| p.format)),
+                |e| (e.id, e.pinned),
                 move |entry| {
                     let id = entry.id;
                     let index = memo(move || results.with(|r| r.iter().position(|e| e.id == id)));
-                    if entry.picture_path().is_some_and(|p| !p.exists()) {
-                        let _ = writer.send(entry.clone());
-                    }
-                    row(entry, index, picked, written, choose, drop_entry)
+                    row(entry, index, picked, choose, drop_entry, copy)
                 },
             )
             // Goes by closing up, those below it rising into its place.
@@ -579,28 +390,36 @@ pub fn panel(output: Output) -> Div {
                         .child(rows),
                 )
                 .child(
-                    show(
-                        move || loaded.get() && results.with(Vec::is_empty),
-                        move || nothing(query, failed),
-                    )
-                    .appear()
-                    .enter(|s| s.opacity(0.0_f32).scale(0.9_f32))
-                    .exit(|s| s.opacity(0.0_f32))
-                    .transition(overshoot(360)),
+                    show(move || results.with(Vec::is_empty), move || nothing(query))
+                        .appear()
+                        .enter(|s| s.opacity(0.0_f32).scale(0.9_f32))
+                        .exit(|s| s.opacity(0.0_f32))
+                        .transition(overshoot(360)),
                 ),
         )
         .child(footer(results, entries, query))
+        .child(show(
+            move || !state.status.with(String::is_empty) || !copy.error().is_empty(),
+            move || {
+                txt(TextStyle::BODY_SMALL, move || {
+                    let error = copy.error();
+                    let status = state.status.get();
+                    if error.is_empty() {
+                        status
+                    } else if status.is_empty() {
+                        error
+                    } else {
+                        format!("{error}\n{status}")
+                    }
+                })
+                .dyn_style(|s| s.text_color(colors().error))
+            },
+        ))
 }
 
 /// What the list says when it has nothing to show.
-fn nothing(query: Signal<String>, failed: Signal<bool>) -> Div {
-    let (symbol, said): (&'static Symbol, String) = if failed.get_untracked() {
-        (icons::CONTENT_PASTE_OFF, "cliphist isn't there".into())
-    } else if query.with_untracked(|q| q.trim().is_empty()) {
-        (icons::CONTENT_PASTE, "Nothing copied yet".into())
-    } else {
-        (icons::SEARCH_OFF, String::new())
-    };
+fn nothing(query: Signal<String>) -> Div {
+    let state = clipboard_service::state();
     div()
         .absolute()
         .inset(0.0)
@@ -610,13 +429,17 @@ fn nothing(query: Signal<String>, failed: Signal<bool>) -> Div {
         .justify_center()
         .gap(8.0_f32)
         .pointer_events_none()
-        .child(sym(symbol, 48.0, |c| c.outline))
+        .child(sym(icons::CONTENT_PASTE, 48.0, |c| c.outline))
         .child(
             txt(TextStyle::TITLE_MEDIUM, move || {
-                if said.is_empty() {
-                    format!("Nothing like “{}”", query.get().trim())
+                if !state.ready.get() {
+                    "Loading clipboard…".into()
+                } else if !state.available.get() {
+                    "Clipboard unavailable".into()
+                } else if query.with(|q| q.trim().is_empty()) {
+                    "Nothing copied yet".into()
                 } else {
-                    said.clone()
+                    format!("Nothing like “{}”", query.get().trim())
                 }
             })
             .dyn_style(|s| s.text_color(colors().on_surface_variant)),
@@ -624,7 +447,7 @@ fn nothing(query: Signal<String>, failed: Signal<bool>) -> Div {
 }
 
 /// The keys, and how many there are.
-fn footer(results: Memo<Vec<Entry>>, entries: Signal<Vec<Entry>>, query: Signal<String>) -> Div {
+fn footer(results: Memo<Vec<Entry>>, entries: Memo<Rc<Vec<Entry>>>, query: Signal<String>) -> Div {
     let key = |cap: &'static str, does: &'static str| {
         div()
             .flex()
@@ -664,7 +487,7 @@ fn footer(results: Memo<Vec<Entry>>, entries: Signal<Vec<Entry>>, query: Signal<
         .child(div().flex_1())
         .child(
             txt(TextStyle::LABEL_MEDIUM, move || {
-                let all = entries.with(Vec::len);
+                let all = entries.with(|entries| entries.len());
                 if query.with(|q| q.trim().is_empty()) {
                     format!("{all} kept")
                 } else {
@@ -683,9 +506,9 @@ fn row(
     entry: Entry,
     index: Memo<Option<usize>>,
     picked: Signal<usize>,
-    written: Signal<HashSet<u64>>,
     choose: impl Fn(&Entry) + Copy + 'static,
     forget: impl Fn(&Entry) + Copy + 'static,
+    copy: copy::Copy,
 ) -> Div {
     let chosen = memo(move || index.get() == Some(picked.get()));
     let hovered = signal(false);
@@ -710,11 +533,11 @@ fn row(
     let delay = untrack(|| index.get()).unwrap_or(0).min(STAGGERED) as u64 * 22;
     let height = entry.height();
     let id = entry.id;
-    let leading = match entry.picture_path() {
-        Some(path) => thumbnail(path, written, id),
-        None => kind_badge(&entry.preview, chosen),
+    let leading = match &entry.view.picture {
+        Some(_) => thumbnail(entry.payload.bytes.clone()),
+        None => kind_badge(&entry.view.preview, chosen),
     };
-    let (title, detail) = match &entry.picture {
+    let (title, detail) = match &entry.view.picture {
         Some(p) => (
             static_txt(TextStyle::BODY_MEDIUM, "Image"),
             Some(p.describe()),
@@ -725,7 +548,7 @@ fn row(
                 .apply(div())
                 .max_h(40.0)
                 .overflow_hidden()
-                .child(entry.preview.clone()),
+                .child(entry.view.preview.clone()),
             None,
         ),
     };
@@ -738,6 +561,7 @@ fn row(
         })
     };
     let forget_entry = entry.clone();
+    let pinned = entry.pinned;
     let chosen_entry = entry;
     let mut text = div()
         .flex_1()
@@ -793,6 +617,30 @@ fn row(
                 })
                 .child(leading)
                 .child(text)
+                .child(
+                    icon_btn(
+                        if pinned { icons::KEEP_OFF } else { icons::KEEP },
+                        32.0,
+                        move |c| {
+                            if pinned {
+                                c.primary
+                            } else {
+                                c.on_surface_variant
+                            }
+                        },
+                    )
+                    .on_click(move |e| {
+                        e.stop_propagation();
+                        copy.toggle_pin(id);
+                    })
+                    .dyn_style(move |s| {
+                        s.opacity(if pinned {
+                            1.0
+                        } else {
+                            near.get().clamp(0.0, 1.0)
+                        })
+                    }),
+                )
                 .child(
                     icon_btn(icons::CLOSE, 32.0, |c| c.on_surface_variant)
                         .on_click(move |e| {
@@ -850,9 +698,8 @@ fn kind_badge(text: &str, chosen: Memo<bool>) -> Div {
         )
 }
 
-/// The small copy of a picture, which fades in once it is written out.
-fn thumbnail(path: PathBuf, written: Signal<HashSet<u64>>, id: u64) -> Div {
-    let already = path.exists();
+/// Image decoding is handled by AntiWebUI's worker, directly from shared encoded bytes.
+fn thumbnail(bytes: std::sync::Arc<[u8]>) -> Div {
     div()
         .w(128.0)
         .h(PICTURE_H - 16.0)
@@ -871,18 +718,11 @@ fn thumbnail(path: PathBuf, written: Signal<HashSet<u64>>, id: u64) -> Div {
                 .child(sym(icons::IMAGE, 28.0, |c| c.outline)),
         )
         .child(
-            show(
-                move || already || written.with(|w| w.contains(&id)),
-                move || {
-                    img(path.clone())
-                        .absolute()
-                        .inset(0.0)
-                        .rounded(14.0_f32)
-                        .object_fit(ObjectFit::Contain)
-                },
-            )
-            .enter(|s| s.opacity(0.0_f32).scale(1.08_f32))
-            .transition(emphasized(400)),
+            img(bytes)
+                .absolute()
+                .inset(0.0)
+                .rounded(14.0_f32)
+                .object_fit(ObjectFit::Contain),
         )
 }
 

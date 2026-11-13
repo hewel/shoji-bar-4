@@ -5,6 +5,7 @@ mod bar;
 mod battery_card;
 mod calendar;
 mod clipboard;
+mod clipboard_service;
 mod display_power;
 mod dock;
 mod idle;
@@ -66,6 +67,7 @@ fn main() {
             osd::install();
             lock::install();
             idle::install();
+            clipboard_service::install(true);
             for_each_output(|output| {
                 shell_layer::open_bar(output.clone(), shell_layer::Wayland);
                 dock::open(output.clone());

@@ -37,7 +37,7 @@ shoji-bar-4 preview quick-settings right.png --bar-position right --scale 1
 - **Settings**: `preview` doesn't save them. `--bar-position top|left|right` selects the bar edge (top by default), including for panel and component previews. `--output NAME` selects the output instead of the first one.
 - **Real services**: the previews act on them.
   - A click on a network, Bluetooth or audio row really changes it.
-  - Enter and Delete in `clipboard` act on the real cliphist and clipboard.
+  - `clipboard` previews use an isolated in-memory history: new copies arrive live, Enter changes the real clipboard, and Delete/pinning only affect the preview's history. They never open the persistent archive or access its encryption key.
   - Window and workspace clicks in `overview` really change Niri's focus.
 - **`--click X,Y`**: a click.
 - **`--right-click X,Y`**: a right click.
@@ -74,6 +74,18 @@ cargo test --locked --bin shoji-bar-4 shell_layer::tests
 
 ```sh
 cargo test --locked overview::tests
+```
+
+## Native clipboard checks
+
+`src/clipboard_service/payload.rs` owns MIME, encoding, safe aliases and history admission rules. Transport, history and presentation use that shared interpretation; transport's larger ownership limit and cheap completeness checks remain distinct from full history validation. The panel retains immutable image metadata and bounded text previews across history reordering; full-content search text is indexed lazily and released with the retained entries.
+
+`src/clipboard_service/transport.rs` owns the Wayland connection, selection ownership and bounded nonblocking transfers. Its socket-backed ext/wlr tests include a source offering only `text/plain; charset=utf-8` and verify capture and original-byte copying. `history.rs` owns deduplication, pinning, retention and authenticated storage; tests use temporary directories and injected keys, not the user's keyring. The writer lock is released explicitly when history closes, even if a concurrent child still holds a duplicate descriptor.
+
+`clipboard_service.rs` runs the same session dispatch with native or controlled copy I/O. Its tests drive capture, pinning, removal, missing entries, failures and mailbox shutdown. `src/clipboard/copy.rs` owns invocation-scoped pending requests, feedback and close-on-success; the session only publishes receipts. Lifecycle tests use the production request/result path to cover coalesced dismissal/reopening, output switches, delayed owner disposal and batched stale/current acknowledgements. A Panel invocation ends on logical dismissal, not when its closing animation finishes.
+
+```sh
+cargo test --locked --bin shoji-bar-4 clipboard
 ```
 
 ## CPU reports

@@ -12,7 +12,7 @@ A Material 3 Expressive desktop shell for [ShojiWM](https://github.com/bea4dev/S
 
 ## Getting started
 
-You need ShojiWM, a Rust toolchain, and the usual desktop services: NetworkManager, BlueZ, PipeWire, UPower, power-profiles-daemon and logind. `cliphist` and `wl-clipboard` give the clipboard history, and `zenity` lets you pick a user picture.
+You need ShojiWM, a Rust toolchain, and the usual desktop services: NetworkManager, BlueZ, PipeWire, UPower, power-profiles-daemon and logind. Clipboard capture is built in and requires the compositor's `ext-data-control-v1` or `wlr-data-control` protocol; an unlocked Secret Service keyring enables encrypted history across restarts. `zenity` lets you pick a user picture.
 
 ```sh
 git clone https://github.com/bea4dev/shoji-bar-4 ~/.config/shoji-bar-4
