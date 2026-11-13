@@ -60,6 +60,12 @@ cargo test --locked --bin shoji-bar-4 lock::tests
 
 `src/shell_layer.rs` owns shell-surface creation, output binding, placement-driven reconfiguration and closing. Production uses its Wayland adapter; unit tests use the recording adapter through the same `open_bar` and `install_panels` interface. This covers multi-output assignment, unrelated-setting isolation, in-place placement updates and panel input changes without a compositor.
 
+Bars reserve their fixed thickness from the first surface commit, and update that reservation before changing edges. The reservation regression exercises the production Wayland adapter's opening options and queued layer changes with AntiWebUI's real exclusive-zone calculation. It checks top/left/right startup and repeated edge changes with both delayed and immediate configure timing, including valid stretch anchors. It does not map surfaces into a live compositor or assert Niri's viewport recovery.
+
+```sh
+cargo test --locked --bin shoji-bar-4 shell_layer::tests
+```
+
 ## Overview tests
 
 `src/overview/viewport.rs` owns workspace projection, panel-local browsing positions, range clamping and clipped drawing/hit geometry. `src/overview.rs` owns rendering, pixel scaling and event propagation; unchanged workspace positions do not invalidate their canvases. The tests in `src/overview/tests.rs` exercise the same projection and browsing interface as the panel, including window changes after scrolling, and retain a real `Ui` test for wheel propagation and card rebuilds.
