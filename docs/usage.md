@@ -122,7 +122,7 @@ shoji-bar-4 msg idle configure '{"pre_action_fade_seconds":2,"behaviors":[{"name
 
 Screen power requires `NIRI_SOCKET` and a compatible compositor. Custom commands are not sandboxed; review them before enabling. Cancellation prevents queued, not-yet-admitted commands from starting but does not terminate a command already admitted. Caffeine does not bypass locking for explicit or external sleep requests. Integration failures appear in `idle status` and the Idle page; if the session/system bus restarts or another screensaver service releases its name, restart Shoji to re-establish that integration.
 
-Any MPRIS player reporting Playing pauses Shoji's automatic idle actions, including lock, screen-off and suspend. Countdown timers restart when the last playing player pauses, stops or exits; Caffeine and application inhibitors remain independent. This does not block manual or external sleep, and players that do not expose MPRIS still need an application inhibitor or the Caffeine switch.
+Any MPRIS player reporting Playing pauses Shoji's automatic idle actions, including lock, screen-off and suspend. Countdown timers restart when the last playing player pauses, stops or exits; Caffeine and application inhibitors remain independent. This does not block manual or external sleep, and players that do not expose MPRIS still need an application inhibitor or the Caffeine tile.
 
 Safe offscreen previews (no idle actions):
 

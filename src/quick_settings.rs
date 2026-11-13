@@ -153,7 +153,6 @@ fn main_page() -> Div {
         .gap(12.0_f32)
         .child(settle_in(0, header()))
         .child(tiles())
-        .child(crate::idle_settings::caffeine_control())
         .child(settle_in(5, sliders()))
         .child(show(
             || battery().available(),
@@ -654,19 +653,25 @@ fn tiles() -> Div {
                     Some(Page::Sound),
                 )),
         )
-        .child(settle_in(4, row()).child(tile(
-            || icons::WORKSPACES,
-            "Overview",
-            crate::overview::summary,
-            || false,
-            crate::overview::available,
-            || {
-                if let Some((output, _)) = crate::panels::current() {
-                    crate::panels::open(&output, crate::panels::Panel::Overview);
-                }
-            },
-            None,
-        )))
+        .child(
+            settle_in(4, row())
+                .child(tile(
+                    || icons::COFFEE,
+                    "Caffeine",
+                    || {
+                        if crate::idle::caffeine() {
+                            "On".into()
+                        } else {
+                            "Off".into()
+                        }
+                    },
+                    crate::idle::caffeine,
+                    || true,
+                    || crate::idle::set_caffeine(!crate::idle::caffeine()),
+                    None,
+                ))
+                .child(div().flex_1().min_w(0.0)),
+        )
 }
 
 /// The volume and the brightness.

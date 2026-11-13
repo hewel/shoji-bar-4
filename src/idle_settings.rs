@@ -75,22 +75,6 @@ fn note(text: &'static str) -> Div {
         .dyn_style(|s| s.text_color(colors().on_surface_variant))
 }
 
-pub fn caffeine_control() -> Div {
-    section().child(
-        div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .gap(10.0_f32)
-            .child(sym(icons::COFFEE, 22.0, |c| c.primary))
-            .child(static_txt(TextStyle::TITLE_SMALL, "Caffeine").flex_1())
-            .child(switch(Binding::new(
-                crate::idle::caffeine,
-                crate::idle::set_caffeine,
-            ))),
-    )
-}
-
 pub fn idle_page() -> Div {
     let config = settings().with_untracked(|s| s.idle.clone());
     let rows = signal(

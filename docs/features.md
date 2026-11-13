@@ -54,7 +54,7 @@ The icon under the pointer lifts a little and shows its name.
 
 ## Workspace overview
 
-Open it from the bar's **Overview** icon, **Quick Settings → Overview**, or with `shoji-bar-4 msg toggle overview [OUTPUT]`. The bar icon appears when Niri is available and uses the accent color while the overview is open.
+Open it from the bar's **Overview** icon or with `shoji-bar-4 msg toggle overview [OUTPUT]`. The bar icon appears when Niri is available and uses the accent color while the overview is open.
 
 - Each output shows its workspaces as equal-sized, abstract screen viewports, in index order. A compact two-column layout becomes one column when space is limited; taller lists scroll.
 - All windows on an output share one scale. Windows are clipped at the viewport edges; fully offscreen windows are not drawn or clickable. Empty workspaces retain an empty screen at the same scale. The heading counts all windows assigned to the workspace, including those outside the viewport.
@@ -111,7 +111,7 @@ It covers every screen with `ext-session-lock`.
 - Each named rule has an inactivity timeout, an optional locked-screen timeout, and one action: **Lock**, **Screen off**, **Suspend**, **Lock and suspend**, or a trusted custom shell command. Screen off currently uses Niri-compatible IPC; use custom commands on other compositors.
 - A configurable fade (two seconds by default) follows the timeout before acting. It covers every output without intercepting input; activity cancels it. Waking, changing the policy or releasing inhibition starts fresh countdowns.
 - Activity restores screens turned off by Shoji and runs a completed rule's optional resume command once. Commands already admitted for execution are not killed by later cancellation.
-- **Caffeine**, a single-row switch in Quick Settings, pauses local automatic actions and requests a logind idle/sleep inhibitor. It is temporary, not persisted. **Idle & sleep → Advanced → Service status** reports when only local inhibition is available.
+- **Caffeine**, a tile in Quick Settings, pauses local automatic actions and requests a logind idle/sleep inhibitor. Click the tile to toggle it; its On/Off label and active styling follow the other tiles. It is temporary, not persisted. **Idle & sleep → Advanced → Service status** reports when only local inhibition is available.
 - **Media playback** automatically pauses Shoji's idle actions while any MPRIS player reports Playing, even without an application inhibitor. Pausing, stopping or closing the last playing player restarts full countdowns unless Caffeine or another inhibitor is still active. This also pauses automatic locking and screen-off; manual Sleep and external sleep requests remain unchanged. Players without MPRIS must supply an inhibitor or use Caffeine.
 - Compositor idle inhibitors are respected through `ext-idle-notify`. Applications can also use the `org.freedesktop.ScreenSaver` inhibition API; cookies belong to the calling connection and disappear when it disconnects. Shoji does not replace another owner of that bus name.
 - Manual **Sleep** and lock-required idle actions wait for the compositor to acknowledge the lock. Authentication cannot tear down that lock during the pending sleep transition; authenticate again after waking. Plain **Suspend** can explicitly opt out of locking.

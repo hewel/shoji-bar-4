@@ -33,20 +33,6 @@ pub fn available() -> bool {
     niri::available()
 }
 
-pub fn summary() -> String {
-    let workspaces = niri::workspaces().len();
-    let windows = niri::windows().len();
-    format!(
-        "{windows} {} · {workspaces} {}",
-        if windows == 1 { "window" } else { "windows" },
-        if workspaces == 1 {
-            "workspace"
-        } else {
-            "workspaces"
-        }
-    )
-}
-
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct PanelGeometry {
     scale: f32,
