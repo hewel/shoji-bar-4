@@ -123,6 +123,9 @@ They work when the shell can become the notification daemon.
 
 - Cards slide in at the top right on a spring.
 - The history stays in the quick settings.
+- Application icons stay in the small icon slot. Theme names in `image-path` also select an icon, not a body attachment.
+- In-memory pictures and local absolute paths or `file://` URLs appear below the text, fitted without cropping or stretching (including SVG). Missing or invalid pictures leave no empty attachment area.
+- Replacing a notification refreshes its text, actions and picture in both popups and history, including changed files at the same path.
 - Do not disturb.
 
 ## OSD

@@ -2135,6 +2135,7 @@ dependencies = [
  "async-channel",
  "futures-lite",
  "image",
+ "resvg",
  "rustix",
  "serde",
  "serde_json",

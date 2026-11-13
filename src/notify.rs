@@ -123,25 +123,65 @@ fn notification_cards(
 
 /// Resolves a local path, file URL, or theme icon without interpreting remote sources.
 fn named_image_path(name: &str, size: u32) -> Option<PathBuf> {
-    if name.is_empty() {
-        return None;
+    if is_icon_name(name) {
+        icon_file(name, size)
+    } else {
+        local_image_path(name)
     }
+}
+
+fn local_image_path(name: &str) -> Option<PathBuf> {
     if name.starts_with('/') {
         return Some(name.into());
     }
-    if let Ok(url) = url::Url::parse(name) {
-        return match url.scheme() {
-            "file" => url.to_file_path().ok(),
-            _ => None,
-        };
+    let url = url::Url::parse(name).ok()?;
+    (url.scheme() == "file")
+        .then(|| url.to_file_path().ok())
+        .flatten()
+}
+
+/// Theme names denote icons, not attachments; paths and URLs retain their own semantics.
+fn is_icon_name(name: &str) -> bool {
+    !name.is_empty() && !name.contains('/') && url::Url::parse(name).is_err()
+}
+
+fn decode_picture(path: PathBuf) -> Option<Bitmap> {
+    let bytes = std::fs::read(path).ok()?;
+    if image::guess_format(&bytes).is_ok() {
+        return anti_webui::core::images::decode_bitmap(bytes, (648, 288)).ok();
     }
-    icon_file(name, size)
+
+    // The pinned upstream decoder applies nested preserveAspectRatio="none" to the whole SVG.
+    // Render its parsed tree at a uniformly scaled root size instead.
+    let tree = resvg::usvg::Tree::from_data(&bytes, &resvg::usvg::Options::default()).ok()?;
+    let size = tree.size();
+    let scale = (648.0 / size.width()).min(288.0 / size.height());
+    let width = (size.width() * scale).round().max(1.0) as u32;
+    let height = (size.height() * scale).round().max(1.0) as u32;
+    let mut pixels = resvg::tiny_skia::Pixmap::new(width, height)?;
+    resvg::render(
+        &tree,
+        resvg::tiny_skia::Transform::from_scale(scale, scale),
+        &mut pixels.as_mut(),
+    );
+    Some(Bitmap::from_premultiplied(
+        width,
+        height,
+        pixels.take(),
+        false,
+    ))
 }
 
 /// The application's icon, independently of the notification's picture.
 fn icon_of(n: &Notification) -> Div {
     let mut paths = Vec::new();
     paths.extend(named_image_path(&n.app_icon, 64));
+    paths.extend(
+        n.image_path
+            .as_deref()
+            .filter(|name| is_icon_name(name))
+            .and_then(|name| icon_file(name, 64)),
+    );
     paths.extend(
         n.desktop_entry
             .as_deref()
@@ -181,18 +221,10 @@ fn icon_of(n: &Notification) -> Div {
 fn picture_of(n: &Notification) -> Div {
     let picture: Signal<Option<Arc<Bitmap>>> = signal(n.image.clone());
     if picture.get_untracked().is_none()
-        && let Some(path) = n
-            .image_path
-            .as_deref()
-            .and_then(|name| named_image_path(name, 648))
+        && let Some(path) = n.image_path.as_deref().and_then(local_image_path)
     {
         // This task belongs to the card; replacement disposes its callback, even for the same path.
-        task(move || {
-            anti_webui::core::images::decode_bitmap(path, (648, 288))
-                .ok()
-                .map(Arc::new)
-        })
-        .then(move |decoded| picture.set(decoded));
+        task(move || decode_picture(path).map(Arc::new)).then(move |decoded| picture.set(decoded));
     }
     let area = signal((0.0_f32, 0.0_f32));
     div()

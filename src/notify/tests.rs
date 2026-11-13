@@ -168,6 +168,12 @@ fn first_pixel(bitmap: &Bitmap) -> Vec<u8> {
 #[test]
 fn images_replace_in_popups_and_history() {
     if std::env::var("SHOJI_IMAGE_TEST_CHILD").as_deref() != Ok("1") {
+        let data = tempfile::tempdir().unwrap();
+        let icons = data.path().join("icons");
+        std::fs::create_dir(&icons).unwrap();
+        RgbaImage::from_pixel(2, 2, Rgba([45, 85, 125, 255]))
+            .save(icons.join("shoji-notification-test.png"))
+            .unwrap();
         let status = Command::new("dbus-run-session")
             .arg("--")
             .arg(std::env::current_exe().unwrap())
@@ -177,6 +183,7 @@ fn images_replace_in_popups_and_history() {
                 "--nocapture",
             ])
             .env("SHOJI_IMAGE_TEST_CHILD", "1")
+            .env("XDG_DATA_HOME", data.path())
             .status()
             .unwrap();
         assert!(
@@ -486,6 +493,95 @@ fn images_replace_in_popups_and_history() {
             .all(|image| image.rect.height <= 36)
     );
     assert_eq!(label_count(&access::snapshot(), "No picture"), 2);
+
+    let mut hints = HashMap::new();
+    hints.insert("image-path", Value::from("shoji-notification-test"));
+    resident(&mut hints);
+    send_notification(&client, id, "", "Themed icon", &[], hints);
+    let images = scene_images(&render(&mut ui));
+    assert_eq!(
+        images.len(),
+        2,
+        "one icon per surface, without a body picture"
+    );
+    assert!(
+        images.iter().all(|image| {
+            image.rect.width <= 36
+                && image.rect.height <= 36
+                && first_pixel(&image.bitmap) == [45, 85, 125, 255]
+        }),
+        "the image-path theme name belongs in the icon slot: {images:?}"
+    );
+
+    // A nested SVG's aspect-ratio directive must not stretch the root viewport.
+    let svg_path = directory.path().join("square.svg");
+    std::fs::write(
+        &svg_path,
+        r##"<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+          <rect width="64" height="64" fill="#dc143c"/>
+          <svg width="16" height="16" viewBox="0 0 8 8" preserveAspectRatio="none">
+            <rect width="8" height="8" fill="#1428dc"/>
+          </svg>
+        </svg>"##,
+    )
+    .unwrap();
+    let mut hints = HashMap::new();
+    hints.insert("image-path", Value::from(svg_path.to_str().unwrap()));
+    resident(&mut hints);
+    send_notification(
+        &client,
+        id,
+        icon_path.to_str().unwrap(),
+        "Square SVG",
+        &[],
+        hints,
+    );
+    let pictures = scene_images(&render(&mut ui))
+        .into_iter()
+        .filter(|image| image.rect.height > 36)
+        .collect::<Vec<_>>();
+    assert_eq!(pictures.len(), 2);
+    assert!(
+        pictures.iter().all(|image| {
+            image.rect.width == 144
+                && image.rect.height == 144
+                && image.bitmap.width() == image.bitmap.height()
+        }),
+        "square SVG must remain square in both surfaces: {pictures:?}"
+    );
+
+    // Replacing bytes at the same path must not reuse the previous decoded SVG.
+    std::fs::write(
+        &svg_path,
+        r##"<svg xmlns="http://www.w3.org/2000/svg" width="32" height="64">
+          <rect width="32" height="64" fill="#0a141e"/>
+        </svg>"##,
+    )
+    .unwrap();
+    let mut hints = HashMap::new();
+    hints.insert("image-path", Value::from(svg_path.to_str().unwrap()));
+    resident(&mut hints);
+    send_notification(
+        &client,
+        id,
+        icon_path.to_str().unwrap(),
+        "Portrait SVG",
+        &[],
+        hints,
+    );
+    let pictures = scene_images(&render(&mut ui))
+        .into_iter()
+        .filter(|image| image.rect.height > 36)
+        .collect::<Vec<_>>();
+    assert_eq!(pictures.len(), 2);
+    assert!(
+        pictures.iter().all(|image| {
+            image.rect.width == 72
+                && image.rect.height == 144
+                && first_pixel(&image.bitmap) == [10, 20, 30, 255]
+        }),
+        "same-path replacement must reload the picture and its aspect ratio: {pictures:?}"
+    );
 
     for (summary, path) in [
         ("Damaged picture", &damaged_path),
