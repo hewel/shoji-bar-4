@@ -21,6 +21,14 @@ pub fn settings_page() -> Div {
         .gap(12.0_f32)
         .child(header("Settings", div()))
         .child(settle_in(1, account_section()))
+        .child(
+            section()
+                .child(heading(icons::TIMER, "Idle & sleep"))
+                .child(
+                    styled_button("Configure idle actions", ButtonStyle::tonal())
+                        .on_click(|_| crate::quick_settings::go(Page::Idle)),
+                ),
+        )
         .child(settle_in(2, style_section()))
         .child(settle_in(3, bar_section()))
         .child(settle_in(4, clock_section()))

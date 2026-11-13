@@ -43,6 +43,7 @@ The icon under the pointer lifts a little and shows its name.
     - Disabling Dock hides it and removes its bottom-edge trigger and menu input. Re-enabling it restores the dock; pinned apps are kept.
     - The switches persist as `launcher_enabled` and `dock_enabled` in `$XDG_STATE_HOME/shoji-bar-4/settings.json`. Older settings files keep both features enabled.
   - **Clock**: 24-hour time and seconds.
+  - **Idle & sleep**: named timeout actions, warning fade, locked-screen timing and optional resume commands. Edits take effect only after **Apply**.
 
 ## Calendar
 
@@ -103,6 +104,17 @@ It covers every screen with `ext-session-lock`.
 - **When it locks**: on `shoji-bar-4 msg lock`, on logind's Lock (`loginctl lock-session`, or Lock in the quick settings power menu), and before sleep. Nothing outside the lock screen can unlock it.
 - **If the shell dies while locked**: ShojiWM stays locked. Start another locker (`swaylock`, ...) in the same session from a TTY; it takes over the lock and can unlock it.
 - **faillock**: with Arch's default settings, three wrong passwords in 15 minutes lock the account for 10 minutes, even against the right one.
+
+## Idle & sleep
+
+- Automatic actions start **disabled**. The presets are lock after 10 minutes, turn screens off after 11 minutes, and lock then suspend after 15 minutes; enable only those you want.
+- Each named rule has an inactivity timeout, an optional locked-screen timeout, and one action: **Lock**, **Screen off**, **Suspend**, **Lock and suspend**, or a trusted custom shell command. Screen off currently uses Niri-compatible IPC; use custom commands on other compositors.
+- A configurable fade (two seconds by default) follows the timeout before acting. It covers every output without intercepting input; activity cancels it. Waking, changing the policy or releasing inhibition starts fresh countdowns.
+- Activity restores screens turned off by Shoji and runs a completed rule's optional resume command once. Commands already admitted for execution are not killed by later cancellation.
+- **Caffeine**, in Quick Settings and the Idle page, pauses local automatic actions and requests a logind idle/sleep inhibitor. It is temporary, not persisted. Status reports when only local inhibition is available.
+- Compositor idle inhibitors are respected through `ext-idle-notify`. Applications can also use the `org.freedesktop.ScreenSaver` inhibition API; cookies belong to the calling connection and disappear when it disconnects. Shoji does not replace another owner of that bus name.
+- Manual **Sleep** and lock-required idle actions wait for the compositor to acknowledge the lock. Authentication cannot tear down that lock during the pending sleep transition; authenticate again after waking. Plain **Suspend** can explicitly opt out of locking.
+- External sleep requests use a logind delay inhibitor and release it only after lock acknowledgement. This is not a veto: logind may proceed at its configured maximum delay if locking fails. Missing protocol or D-Bus capabilities are reported in status; do not run a second idle daemon with competing policies.
 
 ## Notifications
 

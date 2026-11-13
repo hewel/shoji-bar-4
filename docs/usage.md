@@ -33,7 +33,7 @@ The window frames can follow the shell's colors:
 - It sends its color scheme there as `theme.set` (`src/wm.rs`): on start, on reconnecting (including after a config reload), and whenever the scheme changes.
 - A config that doesn't handle `theme.set` ignores it.
 
-The layer namespaces are `shoji-bar-4-bar`, `-dock`, `-quick-settings`, `-calendar`, `-launcher`, `-overview`, `-clipboard`, `-media`, `-notifications`, `-osd`, `-power` and `-wallpaper`. Use them to give layers ShojiWM effects such as blur.
+The layer namespaces are `shoji-bar-4-bar`, `-dock`, `-quick-settings`, `-calendar`, `-launcher`, `-overview`, `-clipboard`, `-media`, `-notifications`, `-osd`, `-power`, `-wallpaper` and `-idle` (the warning fade). Use them to give layers ShojiWM effects such as blur.
 
 ## Commands
 
@@ -48,6 +48,11 @@ shoji-bar-4 msg toggle clipboard [OUTPUT]
 shoji-bar-4 msg toggle media [OUTPUT]
 shoji-bar-4 msg close
 shoji-bar-4 msg lock                           # only the password unlocks
+shoji-bar-4 msg suspend                        # lock acknowledgement, then suspend
+shoji-bar-4 msg idle status                    # policy/inhibitor status and integration errors
+shoji-bar-4 msg idle config                    # current policy as JSON
+shoji-bar-4 msg idle cancel                    # cancel pending actions and reset countdowns
+shoji-bar-4 msg caffeine on|off|toggle          # temporary automatic-idle inhibition
 shoji-bar-4 msg theme dark|light|auto|toggle
 shoji-bar-4 msg status                         # open panels, running clocks and so on
 shoji-bar-4 msg quit
@@ -69,5 +74,38 @@ Settings are kept in `$XDG_STATE_HOME/shoji-bar-4/settings.json` (usually `~/.lo
 | `pinned` | Desktop IDs of the apps pinned to the dock |
 | `bar_position` | `top` / `left` / `right`; changing it in Settings moves the bar immediately |
 | `clock_24h` / `clock_seconds` | How the clock is shown |
+| `idle` | Idle policy; all automatic actions disabled by default (see below) |
 
 Wallpapers to choose from are read from `~/Pictures/wallpapers`.
+
+## Configuring idle actions
+
+Open **Quick Settings → Settings → Idle & sleep** and press **Apply** after editing. The `idle` object is persisted with the other settings. Invalid policy input is rejected as a whole; an invalid policy loaded from disk falls back to disabled defaults.
+
+`idle configure` replaces the entire policy, not just one rule. For example, this enables only a ten-minute lock with a two-second warning:
+
+```sh
+shoji-bar-4 msg idle configure '{"pre_action_fade_seconds":2,"behaviors":[{"name":"lock","enabled":true,"timeout_seconds":600,"action":"lock"}]}'
+```
+
+| Field | Meaning |
+|---|---|
+| `pre_action_fade_seconds` | Additional warning time after an idle timeout, 0–60 seconds; 0 acts immediately |
+| `behaviors` | Up to 64 rules; an empty array disables all automatic actions |
+| `name` | Unique, nonempty rule name |
+| `enabled` | Whether this rule runs; defaults to false |
+| `timeout_seconds` | Normal inactivity timeout, 0–86400; 0 disables this clock |
+| `locked_timeout_seconds` | Timeout while locked, 0–86400; 0 uses the normal timeout |
+| `action` | `lock`, `screen_off`, `suspend`, `lock_and_suspend` or `command`; required for enabled rules |
+| `lock_before_suspend` | For `suspend`, wait for locking first; defaults to true. `lock_and_suspend` always locks |
+| `command` | Required for `command`; executed as your user through `/bin/sh -c` |
+| `resume_command` | Optional command after activity/wake or policy cancellation, only if the action ran |
+
+Screen power requires `NIRI_SOCKET` and a compatible compositor. Custom commands are not sandboxed; review them before enabling. Cancellation prevents queued, not-yet-admitted commands from starting but does not terminate a command already admitted. Caffeine does not bypass locking for explicit or external sleep requests. Integration failures appear in `idle status` and the Idle page; if the session/system bus restarts or another screensaver service releases its name, restart Shoji to re-establish that integration.
+
+Safe offscreen previews (no idle actions):
+
+```sh
+shoji-bar-4 preview idle /tmp/idle.png --width 440 --height 700
+shoji-bar-4 preview idle-warning /tmp/idle-warning.png --ms 2200
+```

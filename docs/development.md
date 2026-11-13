@@ -45,6 +45,17 @@ shoji-bar-4 preview quick-settings right.png --bar-position right --scale 1
 - **`--key K`**: after the clicks, presses a key (`ArrowDown`, `ArrowUp`, `Enter`, `Delete`, `Escape`), or types K if it is a character. It can be given more than once.
 - **`--click-frames N`**: how many frames to run after a click (20 by default). Make it small to catch an animation a click starts from its beginning.
 
+## Idle and lock lifecycle tests
+
+`src/idle_coordinator.rs` owns sequencing across inactivity, lock acknowledgement, sleep and recovery. `src/idle_runtime.rs` supplies two adapters behind that seam: the AntiWebUI/Wayland/logind desktop implementation and the scenario implementation in `src/idle_runtime/tests.rs`. Tests drive the shared runtime through input events and assert platform observations; they do not inspect the internal rule policy. This covers activity during lock waits, refusal, stale deadlines and sleep-delay release without touching the session.
+
+`src/display_power.rs` owns ordered screen-power requests, cancellation and shutdown restoration. Its tests use a worker-controlled adapter, plus a socket-backed compositor for the Niri protocol and saturated-backlog cases. `src/lock.rs` owns sleep holds, PAM answer generations and unlock suppression; tests exercise that lifecycle without opening compositor surfaces.
+
+```sh
+cargo test --locked --bin shoji-bar-4 idle
+cargo test --locked --bin shoji-bar-4 lock::tests
+```
+
 ## Layer lifecycle tests
 
 `src/shell_layer.rs` owns shell-surface creation, output binding, placement-driven reconfiguration and closing. Production uses its Wayland adapter; unit tests use the recording adapter through the same `open_bar` and `install_panels` interface. This covers multi-output assignment, unrelated-setting isolation, in-place placement updates and panel input changes without a compositor.

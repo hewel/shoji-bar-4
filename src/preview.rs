@@ -50,8 +50,9 @@ pub fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         "title" => (480.0, placement::HEIGHT as f32),
         "dock" => (900.0, 136.0),
         "overview" => (1600.0, 1000.0),
-        "launcher" | "quick-settings" | "calendar" | "clipboard" | "media" | "power"
-        | "lock" => (1600.0, 1000.0),
+        "launcher" | "quick-settings" | "calendar" | "clipboard" | "media" | "power" | "lock" => {
+            (1600.0, 1000.0)
+        }
         _ => (800.0, 600.0),
     };
     let lw: f32 = opt("--width")
@@ -220,6 +221,15 @@ pub fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
             },
             "dock" => crate::dock::view(output, signal(InputRegion::Full)),
             "lock" => crate::lock::view(output),
+            "idle" => div()
+                .w(396.0)
+                .p(16.0_f32)
+                .dyn_style(|s| {
+                    let c = crate::theme::colors();
+                    s.bg(c.surface_container).text_color(c.on_surface)
+                })
+                .child(crate::idle_settings::idle_page()),
+            "idle-warning" => crate::idle::warning_view(2),
             "overview" => crate::panels::view(output, crate::panels::Panel::Overview),
             "launcher" | "quick-settings" | "calendar" | "clipboard" | "media" | "power" => {
                 let panel = crate::panels::Panel::from_name(&part).unwrap();

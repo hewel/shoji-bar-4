@@ -17,6 +17,7 @@ use anti_webui_md3e::components::{MaterialShape, ShapeStyle, loading_indicator, 
 use anti_webui_md3e::icons;
 use anti_webui_md3e::motion::fast_spatial;
 use std::cell::{Cell, RefCell};
+use std::rc::{Rc, Weak};
 use std::time::Duration;
 
 /// How long everything takes to go after the right password, before the lock goes.
@@ -62,9 +63,11 @@ thread_local! {
     static CHECK: Cell<Check> = const { Cell::new(authenticate) };
     /// Where PAM's answers come. Made once, by `install`, outside every window: one made while a
     /// panel's button is handled would answer into the panel, which is gone by then.
-    static ANSWER: RefCell<Option<UiSender<Result<(), Refused>>>> = const { RefCell::new(None) };
+    static ANSWER: RefCell<Option<UiSender<(u64, Result<(), Refused>)>>> = const { RefCell::new(None) };
     /// What the lock screens of the lock there is show.
     static CURRENT: Cell<Option<State>> = const { Cell::new(None) };
+    static SLEEP_HOLD: RefCell<Weak<()>> = const { RefCell::new(Weak::new()) };
+    static AUTH_GENERATION: Cell<u64> = const { Cell::new(0) };
 }
 
 /// Whether it is locked, or locking.
@@ -79,7 +82,7 @@ pub fn lock() {
     }
     crate::panels::close();
     let (state, owner) = create_root(State::new);
-    CURRENT.with(|c| c.set(Some(state)));
+    begin(state);
     let session = lock_session(move |output| screen(output, state));
     LOCK.with(|l| *l.borrow_mut() = Some((session.clone(), owner)));
     // The compositor won't lock, as when something else has: nothing to keep.
@@ -87,41 +90,111 @@ pub fn lock() {
         effect(move || {
             if session.state() == LockState::Refused {
                 eprintln!("shoji-bar-4: the compositor wouldn't lock the session");
-                set_timeout(Duration::ZERO, finish);
+                set_timeout(Duration::ZERO, finish_refused);
             }
         })
     });
 }
 
-/// Unlocks, once the user has shown who they are.
-fn finish() {
-    if let Some((session, owner)) = LOCK.with(|l| l.borrow_mut().take()) {
+/// Keeps the lock intact until the last sleep hold is dropped, even if locking starts later.
+/// Releasing a hold never unlocks: a fresh successful authentication is required afterwards.
+#[must_use = "dropping the hold permits authentication again"]
+pub struct SleepHold(Rc<()>);
+
+impl SleepHold {
+    /// Invalidates pending authentication and unlock animations, protecting the current or next lock.
+    pub fn acquire() -> Self {
+        let hold = SLEEP_HOLD.with(|current| {
+            let mut current = current.borrow_mut();
+            let hold = current.upgrade().unwrap_or_else(|| Rc::new(()));
+            *current = Rc::downgrade(&hold);
+            Self(hold)
+        });
+        next_authentication();
+        if let Some(state) = CURRENT.with(Cell::get) {
+            state.wait_for_sleep();
+        }
+        hold
+    }
+}
+
+impl Drop for SleepHold {
+    fn drop(&mut self) {
+        if Rc::strong_count(&self.0) == 1
+            && let Some(state) = CURRENT.with(Cell::get)
+        {
+            state.said.set(String::new());
+        }
+    }
+}
+
+fn sleep_held() -> bool {
+    SLEEP_HOLD.with(|hold| hold.borrow().strong_count() != 0)
+}
+
+fn next_authentication() -> u64 {
+    AUTH_GENERATION.with(|generation| {
+        let next = generation.get().wrapping_add(1);
+        generation.set(next);
+        next
+    })
+}
+
+fn authentication_current(generation: u64) -> bool {
+    generation == AUTH_GENERATION.with(Cell::get) && !sleep_held()
+}
+
+fn begin(state: State) {
+    next_authentication();
+    CURRENT.with(|current| current.set(Some(state)));
+    if sleep_held() {
+        state.wait_for_sleep();
+    }
+}
+
+/// Unlocks only for the authentication that scheduled this finish.
+fn finish(generation: u64) {
+    if authentication_current(generation) {
+        clear_lock();
+    }
+}
+
+/// A refused request has no acknowledged lock to protect, even while sleep holds remain alive.
+fn finish_refused() {
+    if LOCK.with(|lock| {
+        lock.borrow()
+            .as_ref()
+            .is_some_and(|(session, _)| session.state() == LockState::Refused)
+    }) {
+        clear_lock();
+    }
+}
+
+fn clear_lock() {
+    next_authentication();
+    CURRENT.with(|current| current.set(None));
+    if let Some((session, owner)) = LOCK.with(|lock| lock.borrow_mut().take()) {
         session.unlock();
-        CURRENT.with(|c| c.set(None));
         owner.dispose();
     }
 }
 
 /// Makes where PAM's answers come, handing each to the lock there is.
 fn answers() {
-    let to_ui = ui_channel(|result: Result<(), Refused>| {
-        if let Some(state) = CURRENT.with(Cell::get) {
+    let to_ui = ui_channel(|(generation, result): (u64, Result<(), Refused>)| {
+        if authentication_current(generation)
+            && let Some(state) = CURRENT.with(Cell::get)
+        {
             state.answered(result)
         }
     });
     ANSWER.with(|a| *a.borrow_mut() = Some(to_ui));
 }
 
-/// Locks when logind asks and before the computer sleeps. Call once, from the root.
+/// Installs authentication and explicit logind lock requests. Idle owns sleep coordination.
 pub fn install() {
     answers();
-    let s = session();
-    s.on_lock(lock);
-    s.on_prepare_for_sleep(|going| {
-        if going {
-            lock()
-        }
-    });
+    session().on_lock(lock);
 }
 
 /// A lock screen as it is when locked, for pictures of it (`preview lock`). It takes `shoji`
@@ -139,7 +212,7 @@ pub fn view(output: Output) -> Div {
         })
     });
     let state = State::new();
-    CURRENT.with(|c| c.set(Some(state)));
+    begin(state);
     answers();
     screen(output, state)
 }
@@ -152,6 +225,12 @@ impl State {
             said: signal(String::new()),
             shake: animated(0.0f32),
         }
+    }
+
+    fn wait_for_sleep(self) {
+        self.typed.set(String::new());
+        self.phase.set(Phase::Typing);
+        self.said.set("Waiting for system sleep".into());
     }
 
     fn key(self, e: &KeyboardEvent) {
@@ -184,6 +263,10 @@ impl State {
     }
 
     fn submit(self) {
+        if sleep_held() {
+            self.wait_for_sleep();
+            return;
+        }
         if self.typed.with_untracked(String::is_empty) {
             return;
         }
@@ -196,16 +279,18 @@ impl State {
         self.typed.update(|t| password = std::mem::take(t));
         let check = CHECK.with(Cell::get);
         let user = crate::user::name();
+        let generation = next_authentication();
         let _ = std::thread::Builder::new()
             .name("shoji-bar-4 pam".into())
-            .spawn(move || to_ui.send(check(&user, password)));
+            .spawn(move || to_ui.send((generation, check(&user, password))));
     }
 
     fn answered(self, result: Result<(), Refused>) {
         match result {
             Ok(()) => {
                 self.phase.set(Phase::Leaving);
-                set_timeout(LEAVING, finish);
+                let generation = AUTH_GENERATION.with(Cell::get);
+                set_timeout(LEAVING, move || finish(generation));
             }
             Err(refused) => {
                 self.phase.set(Phase::Typing);
@@ -492,4 +577,138 @@ fn status() -> Div {
                     }))
             },
         ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Runs the real lock lifecycle and PAM answer channel without opening compositor surfaces.
+    struct LockScreen {
+        state: State,
+        owner: Owner,
+    }
+
+    impl LockScreen {
+        fn new() -> Self {
+            let (state, owner) = create_root(|| {
+                answers();
+                State::new()
+            });
+            begin(state);
+            Self { state, owner }
+        }
+
+        fn checking(&self) -> u64 {
+            self.state.phase.set(Phase::Checking);
+            next_authentication()
+        }
+
+        fn answer(&self, generation: u64) {
+            let answer = ANSWER.with(|answer| answer.borrow().as_ref().unwrap().clone());
+            answer.send((generation, Ok(())));
+            anti_webui::core::channel::pump();
+        }
+
+        fn assert_waiting(&self) {
+            self.state.typed.set("must not reach PAM".into());
+            self.state.submit();
+            assert!(self.state.typed.get_untracked().is_empty());
+            assert_eq!(self.state.phase.get_untracked(), Phase::Typing);
+            assert_eq!(self.state.said.get_untracked(), "Waiting for system sleep");
+            assert!(CURRENT.with(Cell::get).is_some());
+        }
+    }
+
+    impl Drop for LockScreen {
+        fn drop(&mut self) {
+            clear_lock();
+            ANSWER.with(|answer| answer.borrow_mut().take());
+            self.owner.dispose();
+        }
+    }
+
+    #[test]
+    fn duplicate_holds_require_the_last_release_and_fresh_authentication() {
+        let screen = LockScreen::new();
+        let first = SleepHold::acquire();
+        let second = SleepHold::acquire();
+        drop(first);
+        screen.assert_waiting();
+
+        drop(second);
+        assert!(CURRENT.with(Cell::get).is_some());
+        assert_eq!(screen.state.phase.get_untracked(), Phase::Typing);
+        assert!(screen.state.said.get_untracked().is_empty());
+
+        let generation = screen.checking();
+        screen.answer(generation);
+        assert_eq!(screen.state.phase.get_untracked(), Phase::Leaving);
+        finish(generation);
+        assert!(CURRENT.with(Cell::get).is_none());
+    }
+
+    #[test]
+    fn pre_acquire_pam_answers_stay_invalid_after_release() {
+        let screen = LockScreen::new();
+        let generation = screen.checking();
+        let hold = SleepHold::acquire();
+        screen.answer(generation);
+        screen.assert_waiting();
+        drop(hold);
+
+        screen.answer(generation);
+        assert_eq!(screen.state.phase.get_untracked(), Phase::Typing);
+        assert!(CURRENT.with(Cell::get).is_some());
+    }
+
+    #[test]
+    fn pre_acquire_finish_stays_invalid_after_release() {
+        let screen = LockScreen::new();
+        let generation = screen.checking();
+        screen.answer(generation);
+        assert_eq!(screen.state.phase.get_untracked(), Phase::Leaving);
+
+        let hold = SleepHold::acquire();
+        finish(generation);
+        screen.assert_waiting();
+        drop(hold);
+        finish(generation);
+        assert!(CURRENT.with(Cell::get).is_some());
+        assert_eq!(screen.state.phase.get_untracked(), Phase::Typing);
+    }
+
+    #[test]
+    fn a_hold_acquired_before_lock_creation_protects_the_new_lock() {
+        let hold = SleepHold::acquire();
+        let screen = LockScreen::new();
+        screen.assert_waiting();
+        drop(hold);
+        assert!(CURRENT.with(Cell::get).is_some());
+        assert_eq!(screen.state.phase.get_untracked(), Phase::Typing);
+    }
+
+    #[test]
+    fn holds_survive_refused_cleanup_without_releasing_later_holds() {
+        let screen = LockScreen::new();
+        let old_generation = screen.checking();
+        let old_hold = SleepHold::acquire();
+        // This is the same cleanup used when the compositor refuses the lock.
+        clear_lock();
+        begin(screen.state);
+        let new_hold = SleepHold::acquire();
+        drop(old_hold);
+        screen.assert_waiting();
+        drop(new_hold);
+
+        screen.answer(old_generation);
+        finish(old_generation);
+        assert!(CURRENT.with(Cell::get).is_some());
+        assert_eq!(screen.state.phase.get_untracked(), Phase::Typing);
+
+        let generation = screen.checking();
+        screen.answer(generation);
+        finish(generation);
+        assert!(CURRENT.with(Cell::get).is_none());
+    }
 }

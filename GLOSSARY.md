@@ -28,3 +28,9 @@ The centre of the island that invoked a panel, expressed in that output's logica
 
 **Shell layer**:
 A shell-owned layer-shell surface occupied by a bar, panel, notification popup or similar shell UI.
+
+**Idle coordinator**:
+The module that sequences inactivity, lock acknowledgement, sleep and recovery. It owns ordering across those events, not their platform transport.
+
+**Sleep hold**:
+A lock-screen lifetime that suppresses authentication-driven unlocking while system sleep is pending. Releasing it permits a fresh authentication; it never unlocks by itself.

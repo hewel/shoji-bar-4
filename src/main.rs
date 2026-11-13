@@ -5,7 +5,15 @@ mod bar;
 mod battery_card;
 mod calendar;
 mod clipboard;
+mod display_power;
 mod dock;
+mod idle;
+mod idle_bus;
+mod idle_config;
+mod idle_coordinator;
+mod idle_policy;
+mod idle_runtime;
+mod idle_settings;
 mod ipc;
 mod launcher;
 mod lock;
@@ -57,6 +65,7 @@ fn main() {
             shell_layer::open_popups(shell_layer::Wayland);
             osd::install();
             lock::install();
+            idle::install();
             for_each_output(|output| {
                 shell_layer::open_bar(output.clone(), shell_layer::Wayland);
                 dock::open(output.clone());

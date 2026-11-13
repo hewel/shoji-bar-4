@@ -13,6 +13,10 @@
 //! shoji-bar-4 msg theme dark|light|auto|toggle
 //! shoji-bar-4 msg quit
 //! shoji-bar-4 msg status
+//! shoji-bar-4 msg idle status
+//! shoji-bar-4 msg idle configure '{"pre_action_fade_seconds":2,"behaviors":[]}'
+//! shoji-bar-4 msg caffeine on|off|toggle
+//! shoji-bar-4 msg suspend
 //! ```
 //!
 //! Without an output, prefer Niri's focused workspace, then the focused window, then the first output.
@@ -149,6 +153,11 @@ fn resolve_focused_output(
 }
 
 fn run(line: &str, resolve_output: impl FnOnce() -> Option<String>) -> Result<String, String> {
+    if let Some(json) = line.strip_prefix("idle configure ") {
+        let value = serde_json::from_str(json).map_err(|e| format!("invalid idle JSON: {e}"))?;
+        crate::idle::apply_config(&value)?;
+        return Ok(String::new());
+    }
     let words: Vec<&str> = line.split_whitespace().collect();
     match words.as_slice() {
         ["toggle" | "open", name, rest @ ..] => {
@@ -179,6 +188,25 @@ fn run(line: &str, resolve_output: impl FnOnce() -> Option<String>) -> Result<St
         // There is no unlock: only the password does that.
         ["lock"] => {
             crate::lock::lock();
+            Ok(String::new())
+        }
+        ["suspend"] => {
+            crate::idle::request_suspend();
+            Ok(String::new())
+        }
+        ["idle", "status"] => Ok(crate::idle::status_text().replace('\n', " · ")),
+        ["idle", "config"] => Ok(settings().with(|s| s.idle.to_json().to_string())),
+        ["idle", "cancel"] => {
+            crate::idle::cancel_warning();
+            Ok(String::new())
+        }
+        ["caffeine", mode @ ("on" | "off" | "toggle")] => {
+            let enabled = match *mode {
+                "on" => true,
+                "off" => false,
+                _ => !crate::idle::caffeine(),
+            };
+            crate::idle::set_caffeine(enabled);
             Ok(String::new())
         }
         ["close"] => {

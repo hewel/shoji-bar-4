@@ -2125,10 +2125,15 @@ version = "0.1.0"
 dependencies = [
  "anti-webui",
  "anti-webui-md3e",
+ "async-channel",
+ "futures-lite",
+ "rustix",
+ "serde",
  "serde_json",
  "tempfile",
  "ureq",
  "url",
+ "zbus",
 ]
 
 [[package]]

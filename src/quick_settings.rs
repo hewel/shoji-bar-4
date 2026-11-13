@@ -26,6 +26,7 @@ pub enum Page {
     Bluetooth,
     Sound,
     Settings,
+    Idle,
 }
 
 thread_local! {
@@ -57,6 +58,10 @@ pub fn go(page: Page) {
 /// Goes back to the first page, for Escape; false when it is already there.
 pub fn back() -> bool {
     match page_signal() {
+        Some(p) if p.get_untracked() == Page::Idle => {
+            p.set(Page::Settings);
+            true
+        }
         Some(p) if p.get_untracked() != Page::Main => {
             p.set(Page::Main);
             true
@@ -71,7 +76,7 @@ pub fn slider_style() -> SliderStyle {
 }
 
 pub fn panel(output: Output) -> Div {
-    let _ = output;
+    let available_height = (output.logical_size.height as f32 - 120.0).max(160.0);
     let page = signal(START.with(|s| s.replace(Page::Main)));
     PAGE.with(|p| p.set(Some(page)));
     // The pages lie over each other, so the panel takes the height of the one shown, going to that
@@ -95,6 +100,8 @@ pub fn panel(output: Output) -> Div {
             move || {
                 let fit = fit.clone();
                 build()
+                    .max_h(available_height)
+                    .overflow_y_scroll()
                     .absolute()
                     .top(0.0)
                     .left(0.0)
@@ -133,7 +140,8 @@ pub fn panel(output: Output) -> Div {
                     Page::Settings,
                     crate::qs_settings::settings_page,
                     56.0,
-                )),
+                ))
+                .child(page_view(Page::Idle, crate::idle_settings::idle_page, 56.0)),
         )
 }
 
@@ -145,6 +153,7 @@ fn main_page() -> Div {
         .gap(12.0_f32)
         .child(settle_in(0, header()))
         .child(tiles())
+        .child(crate::idle_settings::caffeine_control())
         .child(settle_in(5, sliders()))
         .child(show(
             || battery().available(),
@@ -240,7 +249,6 @@ fn header() -> Div {
                     show(
                         move || power_open.get(),
                         move || {
-                            let s = session();
                             let actions: [(&'static Symbol, &str, Power); 5] = [
                                 (icons::LOCK, "Lock", Power::Lock),
                                 (icons::BEDTIME, "Sleep", Power::Sleep),
@@ -297,7 +305,7 @@ fn header() -> Div {
                                             }
                                             Power::Sleep => {
                                                 crate::panels::close();
-                                                drop(s.suspend());
+                                                crate::idle::request_suspend();
                                             }
                                             // Asked about first, in a dialog in place of this
                                             // panel.
