@@ -1,6 +1,7 @@
 //! The clipboard's history, as cliphist keeps it: a search field over what was copied, newest
 //! first, the pictures as small copies of themselves. Arrows move the choice, Enter or a click puts
 //! it back on the clipboard, Delete forgets it (Shift+Delete while searching), Escape closes.
+//! Pictures are shown as thumbnails and copied back as their original encoded bytes and MIME type.
 
 use crate::panels::close;
 use crate::theme::{TextStyle, colors, elevation};
@@ -10,9 +11,10 @@ use anti_webui::shell::prelude::*;
 use anti_webui_md3e::components::sized_icon;
 use anti_webui_md3e::icons::{self, Symbol};
 use anti_webui_md3e::motion::{default_spatial, fast_spatial};
+use image::ImageDecoder;
 use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
-use std::io::Write;
+use std::io::BufReader;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::rc::Rc;
@@ -46,10 +48,18 @@ struct Entry {
 
 #[derive(Clone, Debug, PartialEq)]
 struct Picture {
-    format: String,
+    format: image::ImageFormat,
     width: u32,
     height: u32,
     size: String,
+}
+
+fn supported_format(format: image::ImageFormat) -> bool {
+    use image::ImageFormat as F;
+    matches!(
+        format,
+        F::Png | F::Jpeg | F::Gif | F::WebP | F::Bmp | F::Tiff
+    )
 }
 
 impl Entry {
@@ -76,7 +86,10 @@ impl Entry {
         let query = query.trim().to_lowercase();
         query.is_empty()
             || match &self.picture {
-                Some(p) => p.format.contains(&query) || "image".contains(&query),
+                Some(p) => {
+                    p.format.extensions_str().iter().any(|f| f.contains(&query))
+                        || "image".contains(&query)
+                }
                 None => self.preview.to_lowercase().contains(&query),
             }
     }
@@ -84,7 +97,7 @@ impl Entry {
     /// Where the small copy of its picture goes.
     fn picture_path(&self) -> Option<PathBuf> {
         let p = self.picture.as_ref()?;
-        Some(pictures_dir().join(format!("{}.{}", self.id, p.format)))
+        Some(pictures_dir().join(format!("{}.{}", self.id, p.format.extensions_str()[0])))
     }
 }
 
@@ -97,18 +110,19 @@ impl Picture {
             .strip_suffix("]]")?;
         let mut words = rest.split_whitespace();
         let size = format!("{} {}", words.next()?, words.next()?);
-        let format = words.next()?.to_lowercase();
-        if !matches!(
-            format.as_str(),
-            "png" | "jpeg" | "jpg" | "webp" | "gif" | "bmp"
-        ) {
+        let format = image::ImageFormat::from_extension(words.next()?)?;
+        if !supported_format(format) {
             return None;
         }
         let (width, height) = words.next()?.split_once('x')?;
+        let (width, height) = (width.parse().ok()?, height.parse().ok()?);
+        if width == 0 || height == 0 {
+            return None;
+        }
         Some(Self {
             format,
-            width: width.parse().ok()?,
-            height: height.parse().ok()?,
+            width,
+            height,
             size,
         })
     }
@@ -116,11 +130,66 @@ impl Picture {
     fn describe(&self) -> String {
         format!(
             "{} · {} × {} · {}",
-            self.format.to_uppercase(),
+            self.format.extensions_str()[0].to_uppercase(),
             self.width,
             self.height,
             self.size
         )
+    }
+}
+
+/// Reads a picture's real format and dimensions without decoding its full-size pixels.
+fn picture_from_file(path: &Path) -> Option<Picture> {
+    let file = std::fs::File::open(path).ok()?;
+    let bytes = file.metadata().ok()?.len();
+    let reader = image::ImageReader::new(BufReader::new(file))
+        .with_guessed_format()
+        .ok()?;
+    let format = reader.format().filter(|f| supported_format(*f))?;
+    let decoder = reader.into_decoder().ok()?;
+    let (width, height) = decoder.dimensions();
+    if width == 0 || height == 0 {
+        return None;
+    }
+    Some(Picture {
+        format,
+        width,
+        height,
+        size: picture_size(bytes),
+    })
+}
+
+/// cliphist 0.7's byte descriptions: binary units, rounded to integers.
+fn picture_size(bytes: u64) -> String {
+    const UNITS: [&str; 3] = ["B", "KiB", "MiB"];
+    let mut value = bytes as f64;
+    let mut unit = 0;
+    while value >= 1024.0 && unit < UNITS.len() - 1 {
+        value /= 1024.0;
+        unit += 1;
+    }
+    format!("{value:.0} {}", UNITS[unit])
+}
+
+fn needs_picture_probe(preview: &str) -> bool {
+    preview.chars().any(|c| c == '\u{fffd}' || c.is_control())
+}
+
+/// Probes only entries whose lossy previews can contain unrecognised binary data.
+fn probe_picture(entry: &mut Entry) {
+    if entry.picture.is_some() || !needs_picture_probe(&entry.preview) {
+        return;
+    }
+    let Ok(file) = decoded_file(&entry.line, &pictures_dir()) else {
+        return;
+    };
+    let Some(picture) = picture_from_file(file.path()) else {
+        return;
+    };
+    entry.picture = Some(picture);
+    if let Some(path) = entry.picture_path() {
+        // The writer can retry the same entry if publishing this confirmed picture fails.
+        let _ = file.persist(path);
     }
 }
 
@@ -150,10 +219,14 @@ fn load(done: impl Fn(Option<Vec<Entry>>) + 'static) {
                 .ok()
                 .filter(|o| o.status.success())
                 .map(|o| {
-                    String::from_utf8_lossy(&o.stdout)
+                    let mut entries: Vec<Entry> = String::from_utf8_lossy(&o.stdout)
                         .lines()
                         .filter_map(Entry::parse)
-                        .collect()
+                        .collect();
+                    for entry in &mut entries {
+                        probe_picture(entry);
+                    }
+                    entries
                 });
             to_ui.send(listed);
         });
@@ -180,24 +253,40 @@ fn picture_writer(written: Signal<HashSet<u64>>) -> mpsc::Sender<Entry> {
     tx
 }
 
-/// `cliphist decode` into a file, which is only there once it is whole.
-fn decode(line: &str, to: &Path) -> std::io::Result<()> {
-    let part = to.with_extension("part");
-    let mut child = Command::new("cliphist")
-        .arg("decode")
-        .stdin(Stdio::piped())
-        .stdout(std::fs::File::create(&part)?)
-        .stderr(Stdio::null())
-        .spawn()?;
-    if let Some(mut stdin) = child.stdin.take() {
-        writeln!(stdin, "{line}")?;
-    }
-    if child.wait()?.success() {
-        std::fs::rename(&part, to)
+/// exec arguments cannot contain NUL; cliphist also accepts the entry's numeric id directly.
+fn cliphist_selector(line: &str) -> &str {
+    if line.as_bytes().contains(&0) {
+        line.split('\t').next().unwrap_or(line)
     } else {
-        let _ = std::fs::remove_file(&part);
+        line
+    }
+}
+
+/// Extracts the original cliphist bytes into a unique temporary file.
+fn decoded_file(line: &str, directory: &Path) -> std::io::Result<tempfile::NamedTempFile> {
+    std::fs::create_dir_all(directory)?;
+    let file = tempfile::NamedTempFile::new_in(directory)?;
+    let status = Command::new("cliphist")
+        .arg("decode")
+        .arg(cliphist_selector(line))
+        .stdin(Stdio::null())
+        .stdout(file.reopen()?)
+        .stderr(Stdio::null())
+        .status()?;
+    if status.success() {
+        Ok(file)
+    } else {
         Err(std::io::Error::other("cliphist decode failed"))
     }
+}
+
+/// `cliphist decode` into a file, which is only there once it is whole.
+fn decode(line: &str, to: &Path) -> std::io::Result<()> {
+    let directory = to.parent().unwrap_or_else(|| Path::new("."));
+    decoded_file(line, directory)?
+        .persist(to)
+        .map(|_| ())
+        .map_err(|e| e.error)
 }
 
 /// Runs a shell script with `line` as `$1`, off this thread.
@@ -206,7 +295,7 @@ fn run(script: &'static str, line: String) {
         .name("shoji-bar-4 cliphist".into())
         .spawn(move || {
             let _ = Command::new("sh")
-                .args(["-c", script, "sh", &line])
+                .args(["-c", script, "sh", cliphist_selector(&line)])
                 .stdin(Stdio::null())
                 .status();
         });
@@ -214,6 +303,32 @@ fn run(script: &'static str, line: String) {
 
 /// Puts it on the clipboard again; cliphist then lists it first.
 fn copy(entry: &Entry) {
+    if let Some(picture) = &entry.picture {
+        let line = entry.line.clone();
+        let format = picture.format;
+        let _ = std::thread::Builder::new()
+            .name("shoji-bar-4 clipboard copy".into())
+            .spawn(move || {
+                let result = decoded_file(&line, &pictures_dir()).and_then(|file| {
+                    let mut child = Command::new("wl-copy")
+                        .arg("--type")
+                        .arg(format.to_mime_type())
+                        .stdin(file.reopen()?)
+                        .stdout(Stdio::null())
+                        .stderr(Stdio::null())
+                        .spawn()?;
+                    if child.wait()?.success() {
+                        Ok(())
+                    } else {
+                        Err(std::io::Error::other("wl-copy failed"))
+                    }
+                });
+                if let Err(error) = result {
+                    eprintln!("shoji-bar-4: clipboard copy failed: {error}");
+                }
+            });
+        return;
+    }
     run(
         r#"printf '%s\n' "$1" | cliphist decode | wl-copy"#,
         entry.line.clone(),
@@ -423,7 +538,7 @@ pub fn panel(output: Output) -> Div {
         .child(
             for_each(
                 move || results.get(),
-                |e| e.id,
+                |e| (e.id, e.picture.as_ref().map(|p| p.format)),
                 move |entry| {
                     let id = entry.id;
                     let index = memo(move || results.with(|r| r.iter().position(|e| e.id == id)));
@@ -624,11 +739,17 @@ fn row(
     };
     let forget_entry = entry.clone();
     let chosen_entry = entry;
-    let mut text = div().flex_1().min_w(0.0).flex().flex_col().gap(2.0_f32).child(
-        title
-            .transition_of([Prop::TextColor], Transition::ms(160))
-            .dyn_style(chosen_text),
-    );
+    let mut text = div()
+        .flex_1()
+        .min_w(0.0)
+        .flex()
+        .flex_col()
+        .gap(2.0_f32)
+        .child(
+            title
+                .transition_of([Prop::TextColor], Transition::ms(160))
+                .dyn_style(chosen_text),
+        );
     if let Some(d) = detail {
         text = text.child(
             static_txt(TextStyle::LABEL_MEDIUM, d)
@@ -757,10 +878,13 @@ fn thumbnail(path: PathBuf, written: Signal<HashSet<u64>>, id: u64) -> Div {
                         .absolute()
                         .inset(0.0)
                         .rounded(14.0_f32)
-                        .object_fit(ObjectFit::Cover)
+                        .object_fit(ObjectFit::Contain)
                 },
             )
             .enter(|s| s.opacity(0.0_f32).scale(1.08_f32))
             .transition(emphasized(400)),
         )
 }
+
+#[cfg(test)]
+mod tests;

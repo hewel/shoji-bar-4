@@ -1,15 +1,20 @@
 //! Being the notification daemon, when no one else is: notifications pop up at the top right as
-//! cards that slide in, and stay in a list in quick settings until they are cleared.
+//! cards that slide in, and stay in a list in quick settings until they are cleared. Application
+//! icons stay separate from optional pictures; same-id replacements refresh both surfaces.
 
 use crate::appinfo::{app_by_id, app_icon, icon_file};
 use crate::theme::{TextStyle, colors, elevation};
 use crate::ui::*;
+use anti_webui::core::images::Bitmap;
 use anti_webui::prelude::*;
 use anti_webui::shell::Urgency;
 use anti_webui::shell::prelude::*;
 use anti_webui_md3e::components::{ButtonSize, ButtonStyle, styled_button};
 use anti_webui_md3e::icons;
 use std::cell::OnceCell;
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 thread_local! {
     static SERVER: OnceCell<Option<NotificationServer>> = const { OnceCell::new() };
@@ -30,6 +35,7 @@ pub fn server() -> Option<NotificationServer> {
 }
 
 pub(crate) const WIDTH: f32 = 352.0;
+pub(crate) const POPUP_MAX_HEIGHT: f32 = 560.0;
 /// At most this many pop up at once, the newest; the rest are in quick settings.
 const MAX_POPUPS: usize = 3;
 
@@ -40,6 +46,8 @@ pub fn popups(server: NotificationServer, region: Signal<InputRegion>) -> Div {
         .flex()
         .flex_col()
         .p(14.0_f32)
+        .max_h(POPUP_MAX_HEIGHT)
+        .overflow_y_scroll()
         .select_none()
         .on_resized(move |w, h| {
             region.set(if h > 28.5 {
@@ -48,67 +56,183 @@ pub fn popups(server: NotificationServer, region: Signal<InputRegion>) -> Div {
                 InputRegion::Empty
             })
         })
-        .child(
-            for_each(
-                move || server.popups().into_iter().take(MAX_POPUPS).collect(),
-                |n| n.id,
-                |n| card(n, true).mb(10.0),
-            )
-            .appear()
+        .child(notification_cards(
+            move || server.popups().into_iter().take(MAX_POPUPS).collect(),
+            true,
+        ))
+}
+
+/// Keyed rows for both surfaces; only their card contents change on same-id replacement.
+fn notification_cards(
+    list: impl Fn() -> Vec<Notification> + 'static,
+    popup: bool,
+) -> impl IntoView {
+    let snapshot = memo(move || {
+        let notifications = list();
+        let ids = notifications.iter().map(|n| n.id).collect::<Vec<_>>();
+        let by_id = notifications
+            .into_iter()
+            .map(|n| (n.id, n))
+            .collect::<HashMap<_, _>>();
+        (ids, by_id)
+    });
+    let rows = for_each(
+        move || snapshot.with(|s| s.0.clone()),
+        |id| *id,
+        move |id| {
+            let initial = untrack(|| snapshot.with(|s| s.1.get(&id).cloned()))
+                .expect("a keyed notification row starts with its notification");
+            let current = signal(initial);
+            effect(move || {
+                let next = snapshot.with(|s| {
+                    s.1.get(&id).and_then(|next| {
+                        current
+                            .with_untracked(|old| old != next)
+                            .then(|| next.clone())
+                    })
+                });
+                if let Some(next) = next {
+                    current.set(next);
+                }
+            });
+            let content = dyn_view(move || {
+                let card = card(current.get(), popup);
+                if popup { card } else { card.w_full() }
+            });
+            let row = div().flex_none().child(content);
+            if popup {
+                row.mb(10.0)
+            } else {
+                row.w_full().mb(8.0)
+            }
+        },
+    );
+    if popup {
+        rows.appear()
             .enter(|s| s.opacity(0.0_f32).translate_x(WIDTH * 0.6).scale(0.9_f32))
             .exit(|s| s.opacity(0.0_f32).translate_x(WIDTH * 0.6).scale(0.9_f32))
             .moves(emphasized(380))
-            .transition(overshoot(480)),
-        )
+            .transition(overshoot(480))
+    } else {
+        rows.enter(|s| s.opacity(0.0_f32).scale(0.9_f32))
+            .exit(|s| s.opacity(0.0_f32).translate_x(120.0_f32))
+            .moves(emphasized(320))
+            .transition(emphasized(300))
+    }
 }
 
-/// The icon of a notification: its picture, its app's icon, or a bell.
+/// Resolves a local path, file URL, or theme icon without interpreting remote sources.
+fn named_image_path(name: &str, size: u32) -> Option<PathBuf> {
+    if name.is_empty() {
+        return None;
+    }
+    if name.starts_with('/') {
+        return Some(name.into());
+    }
+    if let Ok(url) = url::Url::parse(name) {
+        return match url.scheme() {
+            "file" => url.to_file_path().ok(),
+            _ => None,
+        };
+    }
+    icon_file(name, size)
+}
+
+/// The application's icon, independently of the notification's picture.
 fn icon_of(n: &Notification) -> Div {
-    // `image-path` may be a file, a `file://` URL, or the name of an icon.
-    let named = |name: &str| -> Option<std::path::PathBuf> {
-        let name = name.strip_prefix("file://").unwrap_or(name);
-        if name.is_empty() {
-            None
-        } else if name.starts_with('/') {
-            Some(name.into())
-        } else {
-            icon_file(name, 64)
-        }
-    };
-    let file = n
-        .image_path
-        .as_deref()
-        .and_then(named)
-        .or_else(|| named(&n.app_icon))
-        .or_else(|| {
-            n.desktop_entry
-                .as_deref()
-                .and_then(app_by_id)
-                .and_then(|a| app_icon(&a, 64))
-        });
-    let frame = div()
+    let mut paths = Vec::new();
+    paths.extend(named_image_path(&n.app_icon, 64));
+    paths.extend(
+        n.desktop_entry
+            .as_deref()
+            .and_then(app_by_id)
+            .and_then(|a| app_icon(&a, 64)),
+    );
+    let candidate = signal(0usize);
+    div()
         .size(36.0)
         .flex_none()
         .rounded(12.0_f32)
-        .overflow_hidden();
-    if let Some(picture) = n.image.clone() {
-        frame.child(
-            bitmap_view(move || Some(picture.clone()))
-                .size_full()
-                .object_fit(ObjectFit::Cover),
-        )
-    } else if let Some(path) = file {
-        frame.child(img(path).size_full().object_fit(ObjectFit::Contain))
-    } else {
-        frame
-            .flex()
-            .items_center()
-            .justify_center()
-            .dyn_style(|s| s.bg(colors().secondary_container))
-            .child(sym(icons::NOTIFICATIONS, 18.0, |c| {
-                c.on_secondary_container
-            }))
+        .overflow_hidden()
+        .child(dyn_view(move || {
+            let current = candidate.get();
+            if let Some(path) = paths.get(current) {
+                div().size_full().child(
+                    img(path.clone())
+                        .size_full()
+                        .object_fit(ObjectFit::Contain)
+                        .on_error(move |_| candidate.update(|i| *i += 1)),
+                )
+            } else {
+                div()
+                    .size_full()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .dyn_style(|s| s.bg(colors().secondary_container))
+                    .child(sym(icons::NOTIFICATIONS, 18.0, |c| {
+                        c.on_secondary_container
+                    }))
+            }
+        }))
+}
+
+/// The notification's own picture, hidden until an in-memory or file image is available.
+fn picture_of(n: &Notification) -> Div {
+    let picture: Signal<Option<Arc<Bitmap>>> = signal(n.image.clone());
+    if picture.get_untracked().is_none()
+        && let Some(path) = n
+            .image_path
+            .as_deref()
+            .and_then(|name| named_image_path(name, 648))
+    {
+        // This task belongs to the card; replacement disposes its callback, even for the same path.
+        task(move || {
+            anti_webui::core::images::decode_bitmap(path, (648, 288))
+                .ok()
+                .map(Arc::new)
+        })
+        .then(move |decoded| picture.set(decoded));
     }
+    let area = signal((0.0_f32, 0.0_f32));
+    div()
+        .w_full()
+        .h(144.0)
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(14.0_f32)
+        .overflow_hidden()
+        .on_resized(move |w, h| area.set((w, h)))
+        .dyn_style(move |s| {
+            let s = s.bg(colors().surface_container);
+            if picture.get().is_some() {
+                s
+            } else {
+                s.hidden()
+            }
+        })
+        .child(
+            bitmap_view(move || picture.get())
+                .size_full()
+                .object_fit(ObjectFit::Contain)
+                // BitmapView's fallback has no natural size upstream, so fit its box explicitly.
+                .dyn_style(move |s| {
+                    let Some(bitmap) = picture.get() else {
+                        return s.hidden();
+                    };
+                    let (width, height) = area.get();
+                    if width <= 0.0 || height <= 0.0 {
+                        return s.hidden();
+                    }
+                    let scale =
+                        (width / bitmap.width() as f32).min(height / bitmap.height() as f32);
+                    s.w(bitmap.width() as f32 * scale)
+                        .h(bitmap.height() as f32 * scale)
+                        .flex_none()
+                }),
+        )
 }
 
 /// A notification as a card: its icon, who sent it, what it says, its actions and a close button.
@@ -219,6 +343,7 @@ pub fn card(n: Notification, popup: bool) -> Div {
                         .transition_of([Prop::Opacity], Transition::ms(150).ease_out()),
                 ),
         );
+    body = body.child(picture_of(&n));
     if any_action {
         body = body.child(actions);
     }
@@ -284,17 +409,10 @@ pub fn history(order: usize) -> Div {
                 // scroll to.
                 .max_h(268.0)
                 .overflow_y_scroll()
-                .child(
-                    for_each(
-                        move || list.as_ref().map(|s| s.notifications()).unwrap_or_default(),
-                        |n| n.id,
-                        |n| card(n, false).w_full().mb(8.0),
-                    )
-                    .enter(|s| s.opacity(0.0_f32).scale(0.9_f32))
-                    .exit(|s| s.opacity(0.0_f32).translate_x(120.0_f32))
-                    .moves(emphasized(320))
-                    .transition(emphasized(300)),
-                ),
+                .child(notification_cards(
+                    move || list.as_ref().map(|s| s.notifications()).unwrap_or_default(),
+                    false,
+                )),
         )
         .child(
             show(
@@ -328,3 +446,6 @@ pub fn history(order: usize) -> Div {
             .transition(emphasized(300)),
         )
 }
+
+#[cfg(test)]
+mod tests;

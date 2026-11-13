@@ -9,7 +9,6 @@ use std::cell::Cell;
 use std::time::Duration;
 
 const PANEL_EXIT_TIME: Duration = Duration::from_millis(380);
-const NOTIFICATION_HEIGHT: i32 = 560;
 
 /// A domain-level layer request, before Wayland options are derived.
 #[derive(Clone, Debug, PartialEq)]
@@ -72,7 +71,7 @@ impl Request {
                     ..Default::default()
                 })
                 .width(crate::notify::WIDTH as i32 + 28)
-                .height(NOTIFICATION_HEIGHT)
+                .height(crate::notify::POPUP_MAX_HEIGHT as i32)
                 .input_region(InputRegion::Empty),
         };
         options = match self.output {
