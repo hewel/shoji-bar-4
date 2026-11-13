@@ -17,10 +17,12 @@ You need ShojiWM, a Rust toolchain, and the usual desktop services: NetworkManag
 ```sh
 git clone https://github.com/bea4dev/shoji-bar-4 ~/.config/shoji-bar-4
 cd ~/.config/shoji-bar-4
-cargo build --release
+./scripts/install.sh
 ```
 
-ShojiWM's default config starts `~/.config/shoji-bar-4/target/release/shoji-bar-4` with the session, binds its keys (`Super` for the launcher, `Super+N` quick settings, `Super+C` calendar, `Super+V` clipboard, `Super+L` lock) and draws the window frames in the shell's colors. With another config, see [Using it with ShojiWM](docs/usage.md#using-it-with-shojiwm).
+The script builds with `Cargo.lock` and installs to `~/.local/bin/shoji-bar-4`. Run it again after updating the checkout to upgrade; use `--prefix /path/to/prefix` for a different installation directory. It does not install system packages, edit your configuration, or restart the running shell.
+
+ShojiWM's default config starts `~/.config/shoji-bar-4/target/release/shoji-bar-4` with the session, binds its keys (`Super` for the launcher, `Super+N` quick settings, `Super+C` calendar, `Super+V` clipboard, `Super+L` lock) and draws the window frames in the shell's colors. To use the installed binary, point its shell command and keybindings at `~/.local/bin/shoji-bar-4`; see [Using it with ShojiWM](docs/usage.md#using-it-with-shojiwm).
 
 ## Documentation
 

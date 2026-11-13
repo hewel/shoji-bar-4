@@ -1,20 +1,39 @@
 # Usage
 
-## Building and running
+## Installing and running
+
+From the checkout, build and install for the current user:
 
 ```sh
-cargo build --release
+./scripts/install.sh
+~/.local/bin/shoji-bar-4
+```
+
+Run the binary inside a ShojiWM session, only if a shell is not already running. Installation does not stop or restart the existing shell, change compositor configuration, or install system packages. It requires Cargo, a Rust toolchain and the project's native build dependencies.
+
+The script uses `cargo install --locked --force` on this checkout, builds a release, and installs the executable to `~/.local/bin`. It can be invoked from any working directory. Run it again after updating the source to upgrade. Add `~/.local/bin` to your shell's `PATH` for terminal commands.
+
+To use a different prefix (relative paths are relative to the invoking directory):
+
+```sh
+./scripts/install.sh --prefix "$HOME/apps/shoji"
+```
+
+This installs to `$HOME/apps/shoji/bin/shoji-bar-4`. The script never invokes sudo; the prefix must be writable by the invoking user. To remove a default installation, use `cargo uninstall --root "$HOME/.local" shoji-bar-4`; saved settings remain untouched.
+
+For development without installation:
+
+```sh
+cargo build --locked --release
 ./target/release/shoji-bar-4
 ```
 
-Run it inside a ShojiWM session. Normally ShojiWM starts it (see below).
-
 ## Using it with ShojiWM
 
-ShojiWM's default config already does everything here. For a config of your own, start the shell and bind its panels to keys in `~/.config/shojiwm/src/index.tsx`:
+ShojiWM's default config starts the executable in `~/.config/shoji-bar-4/target/release/`. To use an installed binary, update its shell command and keybindings to the installed path. For a config of your own, start the shell and bind its panels to keys in `~/.config/shojiwm/src/index.tsx`:
 
 ```ts
-const SHOJI_BAR_4 = "~/.config/shoji-bar-4/target/release/shoji-bar-4";
+const SHOJI_BAR_4 = "~/.local/bin/shoji-bar-4";
 COMPOSITOR.process.once("shell", {
   command: `exec ${SHOJI_BAR_4}`,
   runPolicy: "once-per-session",
