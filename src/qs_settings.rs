@@ -32,6 +32,7 @@ pub fn settings_page() -> Div {
         .child(settle_in(2, style_section()))
         .child(settle_in(3, bar_section()))
         .child(settle_in(4, clock_section()))
+        .child(crate::ai_usage::preferences())
 }
 
 /// The heading of a section: an icon and its name.

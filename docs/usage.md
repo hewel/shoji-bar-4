@@ -52,7 +52,7 @@ The window frames can follow the shell's colors:
 - It sends its color scheme there as `theme.set` (`src/wm.rs`): on start, on reconnecting (including after a config reload), and whenever the scheme changes.
 - A config that doesn't handle `theme.set` ignores it.
 
-The layer namespaces are `shoji-bar-4-bar`, `-dock`, `-quick-settings`, `-calendar`, `-launcher`, `-overview`, `-clipboard`, `-media`, `-notifications`, `-osd`, `-power`, `-wallpaper` and `-idle` (the warning fade). Use them to give layers ShojiWM effects such as blur.
+The layer namespaces are `shoji-bar-4-bar`, `-dock`, `-quick-settings`, `-calendar`, `-launcher`, `-overview`, `-clipboard`, `-media`, `-ai-usage`, `-notifications`, `-osd`, `-power`, `-wallpaper` and `-idle` (the warning fade). Use them to give layers ShojiWM effects such as blur.
 
 ## Commands
 
@@ -65,6 +65,8 @@ shoji-bar-4 msg toggle quick-settings [OUTPUT]
 shoji-bar-4 msg toggle calendar [OUTPUT]
 shoji-bar-4 msg toggle clipboard [OUTPUT]
 shoji-bar-4 msg toggle media [OUTPUT]
+shoji-bar-4 msg toggle ai-usage [OUTPUT]         # all configured AI accounts
+shoji-bar-4 msg ai-usage refresh                # respects retry backoff
 shoji-bar-4 msg close
 shoji-bar-4 msg lock                           # only the password unlocks
 shoji-bar-4 msg suspend                        # lock acknowledgement, then suspend
@@ -94,8 +96,29 @@ Settings are kept in `$XDG_STATE_HOME/shoji-bar-4/settings.json` (usually `~/.lo
 | `bar_position` | `top` / `left` / `right`; changing it in Settings moves the bar immediately |
 | `clock_24h` / `clock_seconds` | How the clock is shown |
 | `idle` | Idle policy; all automatic actions disabled by default (see below) |
+| `ai_usage` | AI usage collector and bar options (see below) |
 
 Wallpapers to choose from are read from `~/Pictures/wallpapers`.
+
+## Configuring AI usage
+
+Install and configure [ai-usagebar](https://github.com/akitaonrails/ai-usagebar), then confirm `ai-usagebar usage --json` succeeds. The executable must be on the shell process's `PATH`. The panel does not manage credentials; a missing CLI produces setup guidance rather than invented readings.
+
+Open **Quick Settings → Settings → AI usage**, or the gear in the AI panel, to change the account and polling options. The AI island's ring shows remaining quota; hover or open the panel for exact values. An empty ring with a blocked symbol means exhausted, a question mark means no percentage is available, and an hourglass means initial collection. Left-click for all accounts; right-click to refresh. Account chevrons expand details; the header's refresh icon includes the last update time in its tooltip. Clock icons indicate personal reset countdowns; the Codex Resets footer uses calendar and forecast symbols for public information. Escape or an outside click dismisses the panel. Disabling AI usage hides its island, closes its panel and stops further collection.
+
+The persisted `ai_usage` object accepts:
+
+| Field | Default | Meaning |
+|---|---|---|
+| `enabled` | `true` | Show the island and collect usage |
+| `provider` | `"auto"` | Exact report account ID, including named accounts such as `openai@work`, or automatic selection |
+| `refresh_minutes` | `5` | Usage polling interval, clamped to 1–120 minutes |
+| `resets_enabled` | `true` | Fetch public Codex reset information; disabling hides it and ignores pending results |
+| `resets_refresh_minutes` | `10` | Public polling interval, clamped to 5–120 minutes |
+| `show_countdown` | `true` | Show the selected window's countdown on the horizontal bar |
+| `show_reset_indicator` | `true` | Show a public-announcement indicator on the bar |
+
+Failures use exponential backoff up to one hour; HTTP 429 waits at least 15 minutes. Neither reopening nor manually refreshing bypasses backoff. Countdowns update locally. Settings are saved by the shell; edit the JSON only while the shell is stopped to avoid overwriting live changes.
 
 ## Configuring idle actions
 

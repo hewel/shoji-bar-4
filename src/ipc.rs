@@ -8,6 +8,8 @@
 //! shoji-bar-4 msg toggle calendar [OUTPUT]
 //! shoji-bar-4 msg toggle clipboard [OUTPUT]
 //! shoji-bar-4 msg toggle media [OUTPUT]
+//! shoji-bar-4 msg toggle ai-usage [OUTPUT]
+//! shoji-bar-4 msg ai-usage refresh
 //! shoji-bar-4 msg close
 //! shoji-bar-4 msg lock
 //! shoji-bar-4 msg theme dark|light|auto|toggle
@@ -198,6 +200,10 @@ fn run(line: &str, resolve_output: impl FnOnce() -> Option<String>) -> Result<St
         ["idle", "config"] => Ok(settings().with(|s| s.idle.to_json().to_string())),
         ["idle", "cancel"] => {
             crate::idle::cancel_warning();
+            Ok(String::new())
+        }
+        ["ai-usage", "refresh"] => {
+            crate::ai_usage_service::refresh();
             Ok(String::new())
         }
         ["caffeine", mode @ ("on" | "off" | "toggle")] => {

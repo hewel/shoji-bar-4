@@ -7,6 +7,7 @@ A Material 3 Expressive desktop shell for [ShojiWM](https://github.com/bea4dev/S
 - **Top or vertical side bar** of floating islands: launcher, workspaces, the active window, a rolling clock, now playing, tray and status icons.
 - **Dock** that hides at the bottom edge and rises when the pointer reaches it.
 - **Quick settings**, **calendar**, **launcher**, **clipboard history**, **media player**, **notifications**, **OSD** and a **lock screen**.
+- **AI usage**: remaining quotas and reset times for all accounts configured in `ai-usagebar`, with a compact bar indicator and optional Codex public reset information.
 - **Dynamic color** from a seed or the wallpaper, moved to on a spring everywhere at once, window frames included.
 - Springs and shape morphs throughout, and no frames drawn while nothing moves (0% CPU when idle).
 

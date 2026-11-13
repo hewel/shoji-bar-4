@@ -93,6 +93,10 @@ pub fn view(output: Output, at: BarPlacement) -> Div {
         .child(
             trailing
                 .child(media_island(output.clone(), at))
+                .child(show(|| settings().with(|s| s.ai_usage.enabled), {
+                    let output = output.clone();
+                    move || crate::ai_usage::island(output.clone(), at)
+                }))
                 .child(tray_island(at))
                 .child(status_island(output, at)),
         )

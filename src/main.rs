@@ -1,5 +1,7 @@
 //! shoji-bar-4: a Material 3 Expressive desktop shell for ShojiWM.
 
+mod ai_usage;
+mod ai_usage_service;
 mod appinfo;
 mod bar;
 mod battery_card;
@@ -68,6 +70,7 @@ fn main() {
             lock::install();
             idle::install();
             clipboard_service::install(true);
+            ai_usage_service::install();
             for_each_output(|output| {
                 shell_layer::open_bar(output.clone(), shell_layer::Wayland);
                 dock::open(output.clone());

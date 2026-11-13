@@ -1,6 +1,7 @@
 //! What the user chose, kept in `$XDG_STATE_HOME/shoji-bar-4/settings.json` and written back
 //! whenever it changes.
 
+use crate::ai_usage_service::AiUsageConfig;
 use crate::idle_config::IdleConfig;
 use anti_webui::prelude::*;
 use serde_json::{Value, json};
@@ -139,6 +140,7 @@ pub struct Settings {
     /// The user's picture, a copy kept next to this file; `None` for the desktop's.
     pub avatar: Option<PathBuf>,
     pub idle: IdleConfig,
+    pub ai_usage: AiUsageConfig,
 }
 
 impl Default for Settings {
@@ -166,6 +168,7 @@ impl Default for Settings {
             clock_seconds: false,
             avatar: None,
             idle: IdleConfig::default(),
+            ai_usage: AiUsageConfig::default(),
         }
     }
 }
@@ -186,6 +189,7 @@ impl Settings {
             "clock_seconds": self.clock_seconds,
             "avatar": self.avatar.as_ref().map(|p| p.to_string_lossy().into_owned()),
             "idle": self.idle.to_json(),
+            "ai_usage": self.ai_usage,
         })
     }
 
@@ -230,6 +234,9 @@ impl Settings {
         }
         if let Some(b) = bool_of("clock_seconds") {
             s.clock_seconds = b;
+        }
+        if let Some(config) = v.get("ai_usage") {
+            s.ai_usage = AiUsageConfig::from_json(config);
         }
         if let Some(idle) = v.get("idle") {
             match IdleConfig::from_json(idle) {

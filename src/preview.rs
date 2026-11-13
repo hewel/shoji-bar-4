@@ -50,9 +50,8 @@ pub fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         "title" => (480.0, placement::HEIGHT as f32),
         "dock" => (900.0, 136.0),
         "overview" => (1600.0, 1000.0),
-        "launcher" | "quick-settings" | "calendar" | "clipboard" | "media" | "power" | "lock" => {
-            (1600.0, 1000.0)
-        }
+        "launcher" | "quick-settings" | "calendar" | "clipboard" | "media" | "power" | "lock"
+        | "ai-usage" => (1600.0, 1000.0),
         _ => (800.0, 600.0),
     };
     let lw: f32 = opt("--width")
@@ -116,6 +115,11 @@ pub fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         }
         crate::settings::settings().update(|s| s.bar_position = bar_position);
         crate::theme::install();
+        if args.iter().any(|a| a == "--ai-usage-demo") {
+            ai_usage_demo();
+        } else if matches!(part.as_str(), "bar" | "ai-usage") {
+            crate::ai_usage_service::install();
+        }
         if part == "clipboard" {
             crate::clipboard_service::install(false);
         }
@@ -234,7 +238,8 @@ pub fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
                 .child(crate::idle_settings::idle_page()),
             "idle-warning" => crate::idle::warning_view(2),
             "overview" => crate::panels::view(output, crate::panels::Panel::Overview),
-            "launcher" | "quick-settings" | "calendar" | "clipboard" | "media" | "power" => {
+            "launcher" | "quick-settings" | "calendar" | "clipboard" | "media" | "power"
+            | "ai-usage" => {
                 let panel = crate::panels::Panel::from_name(&part).unwrap();
                 crate::panels::view(output, panel)
             }
@@ -343,6 +348,7 @@ pub fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
             "ArrowUp" => (Key::Named(NamedKey::ArrowUp), None),
             "Enter" => (Key::Named(NamedKey::Enter), None),
             "Delete" => (Key::Named(NamedKey::Delete), None),
+            "Tab" => (Key::Named(NamedKey::Tab), None),
             "Escape" => (Key::Named(NamedKey::Escape), None),
             other => (Key::Character(other.into()), Some(other.to_owned())),
         };
@@ -384,4 +390,59 @@ pub fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         eprintln!("still asking for frames");
     }
     Ok(())
+}
+
+/// Synthetic quota data is opt-in and never starts the collector or changes saved settings.
+fn ai_usage_demo() {
+    use crate::ai_usage_service::{self as usage, Job};
+    use std::sync::Arc;
+    crate::settings::settings().update(|s| {
+        s.ai_usage.enabled = true;
+        s.ai_usage.provider = "auto".into();
+        s.ai_usage.resets_enabled = true;
+    });
+    let now = usage::now();
+    let mut report = usage::parse_report(
+        br#"{"schema_version":1,"primary":"openai","entries":[
+          {"id":"openai","display_name":"Codex / Demo","plan":"Plus","status":"ok",
+           "metrics":[{"label":"5h","percent":74},{"label":"Weekly","percent":32}],
+           "reset_credits":{"available":2,"credits":[{"title":"Personal reset"}]}},
+          {"id":"anthropic@work","display_name":"Claude / Work demo","plan":"Pro","status":"ok",
+           "metrics":[{"label":"5h","percent":100},{"label":"Weekly","percent":18}]},
+          {"id":"kimi","display_name":"Kimi / Demo","status":"ok",
+           "metrics":[{"label":"Balance","value":"$12.40"}]}
+        ]}"#,
+    )
+    .expect("valid preview report");
+    for entry in &mut report.entries {
+        entry.fetched_at = Some(now);
+        for (index, metric) in entry.metrics.iter_mut().enumerate() {
+            metric.reset_at = metric
+                .percent
+                .map(|_| now + if index == 0 { 7_200 } else { 259_200 });
+        }
+        for credit in &mut entry.credits {
+            credit.expires_at = Some(now + 604_800);
+        }
+    }
+    let mut resets = usage::parse_resets(
+        br#"{"meta":{"api_version":"v1"},"data":{"stats":{"total":12,"avg_interval_days":8},
+          "scheduled_reset":{"id":"demo","reset_type":"regular","text":"Demonstration announcement; not a live reset.","source":{"url":"https://codex-resets.com"}},
+          "active_watch":{"level":"medium","reset_chance_percent":65,"forecast_window":"Next 24 hours","text":"Demonstration AI prediction, not an official commitment."}
+        }}"#,
+    ).expect("valid preview resets");
+    resets.generated_at = Some(now);
+    resets.scheduled.as_mut().unwrap().scheduled_for = Some(now + 86_400);
+    resets.watch.as_mut().unwrap().expires_at = Some(now + 86_400);
+    let state = usage::state();
+    state.usage.set(Job {
+        data: Some(Arc::new(report)),
+        updated_at: Some(now),
+        ..Job::default()
+    });
+    state.resets.set(Job {
+        data: Some(Arc::new(resets)),
+        updated_at: Some(now),
+        ..Job::default()
+    });
 }

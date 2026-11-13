@@ -29,20 +29,23 @@ shoji-bar-4 preview workspaces out.png --ms 0 --frames 40 --every 30   # out-0.p
 shoji-bar-4 preview quick-settings out.png --click 1548,80 --click-frames 1 --ms 0 --frames 8 --every 40
 shoji-bar-4 preview bar left.png --bar-position left
 shoji-bar-4 preview quick-settings right.png --bar-position right --scale 1
+shoji-bar-4 preview ai-usage /tmp/ai-usage.png --ai-usage-demo --scale 1
+shoji-bar-4 preview bar /tmp/ai-bar.png --ai-usage-demo --bar-position left --scale 1
 ```
 
-- **Parts**: `bar`, `dock`, `workspaces`, `title`, `quick-settings`, `calendar`, `launcher`, `clipboard`, `media`, `power`, `overview`, `lock` and `notifications`.
+- **Parts**: `bar`, `dock`, `workspaces`, `title`, `quick-settings`, `calendar`, `launcher`, `clipboard`, `media`, `ai-usage`, `power`, `overview`, `lock` and `notifications`.
   - In `lock`, the password is `shoji`, and PAM is not used.
   - `title` is the window island with a made-up window whose title goes between a long one and a short one every `--switch` ms (80 by default), from 1.2 s for a second and a half, and then stays on the one `--end` names (`long` or `short`). With `--windows`, the two titles belong to two windows that take the keyboard in turn. With `--spinner`, the title is a terminal's with a spinner in front, as Claude Code's is, which at the end changes to another title.
 - **Settings**: `preview` doesn't save them. `--bar-position top|left|right` selects the bar edge (top by default), including for panel and component previews. `--output NAME` selects the output instead of the first one.
 - **Real services**: the previews act on them.
   - A click on a network, Bluetooth or audio row really changes it.
   - `clipboard` previews use an isolated in-memory history: new copies arrive live, Enter changes the real clipboard, and Delete/pinning only affect the preview's history. They never open the persistent archive or access its encryption key.
+  - `ai-usage` and `bar` previews collect real usage unless `--ai-usage-demo` is supplied. That flag uses explicitly labeled synthetic accounts, exercises exhausted and value-only metrics plus public announcements/forecasts, and never starts the collector. Preview settings are never saved.
   - Window and workspace clicks in `overview` really change Niri's focus.
 - **`--click X,Y`**: a click.
 - **`--right-click X,Y`**: a right click.
 - **`--drag X1,Y1:X2,Y2`**: after the clicks, presses at the first point, moves to the second and lets go.
-- **`--key K`**: after the clicks, presses a key (`ArrowDown`, `ArrowUp`, `Enter`, `Delete`, `Escape`), or types K if it is a character. It can be given more than once.
+- **`--key K`**: after the clicks, presses a key (`ArrowDown`, `ArrowUp`, `Tab`, `Enter`, `Delete`, `Escape`), or types K if it is a character. It can be given more than once.
 - **`--click-frames N`**: how many frames to run after a click (20 by default). Make it small to catch an animation a click starts from its beginning.
 
 ## Idle and lock lifecycle tests
@@ -87,6 +90,19 @@ cargo test --locked overview::tests
 ```sh
 cargo test --locked --bin shoji-bar-4 clipboard
 ```
+
+## AI usage checks
+
+`src/ai_usage_service.rs` owns the shared collector, with its model and scheduling code under `src/ai_usage_service/`. `src/ai_usage.rs` renders the bar, account overview and preferences using native AntiWebUI components. The panel route and visibility lifecycle are shared with other shell panels.
+
+Focused tests cover account selection, exhausted and unknown quotas, RFC3339 offsets, rejected schemas and unsafe attribution URLs, preserved privacy opt-outs, independent singleflight jobs, coalesced refreshes, backoff and disabled in-flight results. Subprocess checks exercise large/inherited stdout pipes, output limits, deadlines and unreaped process identity during process-group cleanup. Tests do not use real accounts or the public API.
+
+```sh
+cargo test --locked --bin shoji-bar-4 ai_usage
+cargo test --locked --bin shoji-bar-4 panels::tests
+```
+
+Use the opt-in demo preview for visual checks in both themes and all bar placements, including the portrait output. Use the normal preview to exercise the installed CLI and public API; do not commit screenshots containing personal account data. The compact list inherits the shell's Material roles and type scale; no separate design tokens or web renderer are introduced.
 
 ## CPU reports
 

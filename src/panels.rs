@@ -16,17 +16,19 @@ pub enum Panel {
     Launcher,
     Clipboard,
     Media,
+    AiUsage,
     Power,
     Overview,
 }
 
 impl Panel {
-    pub(crate) const ALL: [Panel; 7] = [
+    pub(crate) const ALL: [Panel; 8] = [
         Self::QuickSettings,
         Self::Calendar,
         Self::Launcher,
         Self::Clipboard,
         Self::Media,
+        Self::AiUsage,
         Self::Power,
         Self::Overview,
     ];
@@ -38,6 +40,7 @@ impl Panel {
             Self::Launcher => "launcher",
             Self::Clipboard => "clipboard",
             Self::Media => "media",
+            Self::AiUsage => "ai-usage",
             Self::Power => "power",
             Self::Overview => "overview",
         }
@@ -48,7 +51,11 @@ impl Panel {
     }
 
     pub(crate) fn enabled(self) -> bool {
-        self != Self::Launcher || settings().with(|s| s.launcher_enabled)
+        match self {
+            Self::Launcher => settings().with(|s| s.launcher_enabled),
+            Self::AiUsage => settings().with(|s| s.ai_usage.enabled),
+            _ => true,
+        }
     }
 
     /// Whether it gives the focus to a field of its own as it opens.
@@ -93,10 +100,13 @@ fn state() -> Open {
             let (s, _) = create_root(|| {
                 let s = signal(None::<Invocation>);
                 effect(move || {
-                    if !Panel::Launcher.enabled()
-                        && s.get_untracked()
-                            .is_some_and(|o| o.panel == Panel::Launcher)
-                    {
+                    let (launcher, ai_usage) =
+                        settings().with(|s| (s.launcher_enabled, s.ai_usage.enabled));
+                    if s.get_untracked().is_some_and(|o| match o.panel {
+                        Panel::Launcher => !launcher,
+                        Panel::AiUsage => !ai_usage,
+                        _ => false,
+                    }) {
                         s.set(None);
                     }
                 });
@@ -204,7 +214,7 @@ pub fn view(output: Output, panel: Panel) -> Div {
 fn place_panel(root: Div, panel: Panel, at: BarPlacement) -> Div {
     let clearance = at.clearance();
     match panel {
-        Panel::QuickSettings => match at.side() {
+        Panel::QuickSettings | Panel::AiUsage => match at.side() {
             PanelSide::Below => root.items_end().justify_start().pt(clearance).pr(14.0_f32),
             PanelSide::Left => root.items_start().justify_end().pl(clearance).pb(14.0_f32),
             PanelSide::Right => root.items_end().justify_end().pr(clearance).pb(14.0_f32),
@@ -267,6 +277,7 @@ pub(crate) fn surface_at(
         }
         Panel::Power => crate::power_dialog::panel(),
         Panel::Overview => crate::overview::panel(output.clone()),
+        Panel::AiUsage => crate::ai_usage::panel(),
     };
     // Keys go to what has the focus, and with nothing focused not to here but to what holds it: the
     // panel takes the focus as it opens, for Escape. The launcher and the clipboard give it to their
@@ -385,28 +396,37 @@ mod tests {
     }
 
     #[test]
-    fn disabling_launcher_closes_it_and_blocks_opening_without_closing_other_panels() {
+    fn disabling_optional_panels_closes_them_without_closing_other_panels() {
         crate::settings::never_save();
-        settings().set(crate::settings::Settings::default());
-        close();
         let output = Output {
             name: "DP-1".to_owned(),
             ..Default::default()
         };
-        open(&output.name, Panel::Launcher);
-        assert!(is_open(&output, Panel::Launcher));
-        settings().update(|s| s.launcher_enabled = false);
-        assert_eq!(current(), None);
+        for panel in [Panel::Launcher, Panel::AiUsage] {
+            settings().set(crate::settings::Settings::default());
+            close();
+            let enable = |on| {
+                settings().update(|s| match panel {
+                    Panel::Launcher => s.launcher_enabled = on,
+                    Panel::AiUsage => s.ai_usage.enabled = on,
+                    _ => unreachable!(),
+                })
+            };
+            open(&output.name, panel);
+            assert!(is_open(&output, panel));
+            enable(false);
+            assert_eq!(current(), None);
 
-        open(&output.name, Panel::Calendar);
-        open("DP-2", Panel::Launcher);
-        toggle(&output, Panel::Launcher);
-        assert_eq!(current(), Some((output.name.clone(), Panel::Calendar)));
+            open(&output.name, Panel::Calendar);
+            open("DP-2", panel);
+            toggle(&output, panel);
+            assert_eq!(current(), Some((output.name.clone(), Panel::Calendar)));
 
-        settings().update(|s| s.launcher_enabled = true);
-        assert!(is_open(&output, Panel::Calendar));
-        toggle(&output, Panel::Launcher);
-        assert!(is_open(&output, Panel::Launcher));
-        close();
+            enable(true);
+            assert!(is_open(&output, Panel::Calendar));
+            toggle(&output, panel);
+            assert!(is_open(&output, panel));
+            close();
+        }
     }
 }

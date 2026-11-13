@@ -9,6 +9,7 @@ Floating islands along the top, left or right. **Settings → Desktop → Bar po
 - **Active window**: on the top bar, its icon and title. A new window, or a new title, comes up from below as the last one goes up, and the island follows its width on a spring, however fast they change. A title wider than the island for the moment fades out at its edge. A few characters changing in one place (a spinner like Claude Code's, a counter, a clock) change where they are, without the title coming up again. A vertical bar shows the application icon only.
 - **Clock**: the digits roll as they change, and hovering changes Roboto Flex's weight. A vertical bar stacks hours, minutes and optional seconds, with AM/PM for 12-hour time; the date stays on the top bar.
 - **Now playing** (a dancing equalizer): a click opens the player under the top bar or beside a vertical bar, a middle click pauses or plays. The vertical island omits the title.
+- **AI usage**: a compact remaining-percentage island; a click opens all accounts, a right click refreshes. Vertical bars stack the label and percentage.
 - **Tray**, network, Bluetooth, volume and battery. Tray menus open beside a vertical bar. Tray icons are resolved from absolute files, application-provided icon directories or the desktop icon theme, with supplied pixmaps and title initials as fallbacks.
 
 ## Dock
@@ -44,6 +45,7 @@ The icon under the pointer lifts a little and shows its name.
     - The switches persist as `launcher_enabled` and `dock_enabled` in `$XDG_STATE_HOME/shoji-bar-4/settings.json`. Older settings files keep both features enabled.
   - **Clock**: 24-hour time and seconds.
   - **Idle & sleep**: action switches and timeout summaries first; edit an action to change its timer. **More options** holds names, action types, locked-screen timing and resume commands. **Advanced** holds the warning duration, custom actions and service status. Edits take effect only after **Apply**.
+  - **AI usage**: enable the collector, choose the bar's account, adjust refresh intervals and toggle countdowns or public reset information.
 
 ## Calendar
 
@@ -51,6 +53,19 @@ The icon under the pointer lifts a little and shows its name.
 - The month, from Monday, six weeks of it, with the days of the months around it faint. Today stands on a cookie that turns under the pointer.
   - ‹ and ›, or the mouse wheel, go through the months, which slide over; the month's name goes back to this one.
 - Wavy rings for CPU, memory and temperature.
+
+## AI usage
+
+The native **AI usage** panel adapts `noctalia-ai-usage` without a Noctalia runtime. It uses `ai-usagebar usage --json` (schema 1) for account data and the optional [Codex Resets](https://codex-resets.com) public API.
+
+- All configured accounts remain visible, regardless of the account selected for the bar. Each quota window has a label, a slim remaining bar, a percentage and its reset countdown; plan, exact times, personal reset credits and credit balances are disclosed on demand.
+- The bar shows remaining quota as a compact ring around the AI symbol; exact percentages stay in its tooltip and the panel. A full ring means full quota, an empty ring with a blocked symbol means exhausted, and a question mark means no percentage is available. Initial collection uses an hourglass, and errors retain a separate warning. Refresh and preferences are icon buttons; account chevrons reveal details. Clock symbols accompany compact reset durations, while calendar and forecast symbols summarize the public feed. Hover or focus for labels; the refresh tooltip includes the last update time. Error and cached-state warnings remain explicit text.
+- Panel percentages and the bar ring mean **remaining**, not used: 74% used becomes 26% remaining. In the panel, exhausted is 0%; unknown is “—”. A non-percentage metric retains its reported value.
+- Automatic account selection prefers the report's primary account, then Codex, then an available account. A pinned account that disappears stays missing rather than silently changing identity.
+- One collector is shared by every output and panel. Opening a panel does not request fresh data. Failed requests keep the previous snapshot with a visible warning; manual refresh respects the same retry backoff.
+- Public announcements and AI forecasts are separate from personal quota resets. Passing an announced time means awaiting confirmation, not that a reset executed. Expired forecasts disappear; predictions are not official commitments. Source links open through `xdg-open`.
+- Chinese and English text follows the process locale. Colors, typography, controls and placement follow the shell's existing Material theme.
+- No login files are read by the shell, no raw CLI diagnostics are displayed, and no account information is sent to Codex Resets. Authentication remains the CLI's responsibility.
 
 ## Workspace overview
 
