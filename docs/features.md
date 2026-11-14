@@ -155,9 +155,12 @@ When the volume or the brightness changes, a pill shows above the dock.
 
 ## Theme
 
-- The scheme is made from a seed color with Material You's HCT. The seed can also come from the wallpaper.
-- Variants: Tonal, Vibrant, Expressive, Fidelity, Neutral and Mono.
-- A new scheme is moved to on a spring, everywhere at once.
+- Matugen is the single dynamic palette source, from a seed color or the dominant wallpaper color. Seed swatches show inputs, not predictions from a second algorithm.
+- Variants: Tonal, Vibrant, Expressive, Fidelity, Neutral and Mono; light, dark, or automatic light from 07:00 to 19:00.
+- A successfully generated scheme moves on a spring throughout the shell. ShojiWM receives the same committed palette, not another calculation.
+- Generation runs off the UI thread. Rapid choices coalesce; superseded results cannot replace an accepted palette. Generation failures keep the last valid colors and expose a retry action; a built-in palette is used only when there is no valid cache.
+- **Application colors** has independent, off-by-default GTK 3/4 and Zen switches. GTK uses an Adwaita base while preserving fonts, icons and cursor settings. Zen follows the shared palette over workspace colors, only in browser chrome and only for the install-default profile.
+- External files are managed reversibly, with conflict detection and recovery records. Applications are never forcibly restarted; the UI distinguishes updated files from applications that may need restarting. Niri configuration, websites, Zen Mods and unrelated Matugen configuration are untouched.
 
 ## Wallpaper
 

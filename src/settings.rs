@@ -130,6 +130,9 @@ pub struct Settings {
     pub seed_from_wallpaper: bool,
     pub palette: Palette,
     pub wallpaper: Option<PathBuf>,
+    /// Explicit, independent opt-ins for reversible external theme management.
+    pub gtk_theme_enabled: bool,
+    pub zen_theme_enabled: bool,
     /// The desktop entry ids of the apps the dock always shows, in order.
     pub pinned: Vec<String>,
     pub bar_position: BarPosition,
@@ -151,6 +154,8 @@ impl Default for Settings {
             seed_from_wallpaper: false,
             palette: Palette::TonalSpot,
             wallpaper: None,
+            gtk_theme_enabled: false,
+            zen_theme_enabled: false,
             pinned: [
                 "org.kde.dolphin",
                 "google-chrome",
@@ -181,6 +186,8 @@ impl Settings {
             "seed_from_wallpaper": self.seed_from_wallpaper,
             "palette": self.palette.name(),
             "wallpaper": self.wallpaper.as_ref().map(|p| p.to_string_lossy().into_owned()),
+            "gtk_theme_enabled": self.gtk_theme_enabled,
+            "zen_theme_enabled": self.zen_theme_enabled,
             "pinned": self.pinned,
             "bar_position": self.bar_position.name(),
             "launcher_enabled": self.launcher_enabled,
@@ -213,6 +220,12 @@ impl Settings {
             s.palette = p;
         }
         s.wallpaper = str_of("wallpaper").map(PathBuf::from);
+        if let Some(enabled) = bool_of("gtk_theme_enabled") {
+            s.gtk_theme_enabled = enabled;
+        }
+        if let Some(enabled) = bool_of("zen_theme_enabled") {
+            s.zen_theme_enabled = enabled;
+        }
         s.avatar = str_of("avatar").map(PathBuf::from);
         if let Some(list) = v.get("pinned").and_then(Value::as_array) {
             s.pinned = list

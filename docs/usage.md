@@ -92,6 +92,8 @@ Settings are kept in `$XDG_STATE_HOME/shoji-bar-4/settings.json` (usually `~/.lo
 | `seed_from_wallpaper` | Take the seed color from the wallpaper |
 | `palette` | `tonal-spot` / `vibrant` / `expressive` / `fidelity` / `neutral` / `monochrome` |
 | `wallpaper` | The wallpaper's path (`null` draws none) |
+| `gtk_theme_enabled` | Opt into reversible GTK 3/4 palette linking; default `false` |
+| `zen_theme_enabled` | Opt into reversible Zen Browser chrome palette linking; default `false` |
 | `pinned` | Desktop IDs of the apps pinned to the dock |
 | `bar_position` | `top` / `left` / `right`; changing it in Settings moves the bar immediately |
 | `clock_24h` / `clock_seconds` | How the clock is shown |
@@ -99,6 +101,28 @@ Settings are kept in `$XDG_STATE_HOME/shoji-bar-4/settings.json` (usually `~/.lo
 | `ai_usage` | AI usage collector and bar options (see below) |
 
 Wallpapers to choose from are read from `~/Pictures/wallpapers`.
+
+## Matugen and application colors
+
+Install [Matugen](https://github.com/InioX/matugen) 4.2 or newer and make it available on the shell's `PATH`. **Settings → Style & color** controls the wallpaper/seed, existing six variants, and light/auto/dark mode. **Retry theme** regenerates the current selection, including an image whose contents changed at the same path.
+
+The shell runs Matugen with its own temporary configuration and bundled templates. It does not read or modify your Matugen configuration, execute your hooks, or ask Matugen to set the wallpaper. The last valid palette is cached at `$XDG_STATE_HOME/shoji-bar-4/theme/last-good.json`. A missing CLI, invalid image or generation error leaves that palette in use and shows an error. Without a usable cache, the shell starts with built-in colors. The effective mode stays with the applied colors if a requested mode fails.
+
+Under **Application colors**, enable each target explicitly:
+
+- **GTK 3 / 4** requires the `adw-gtk-theme` package (Arch: `sudo pacman -S adw-gtk-theme`), the `gsettings` command, and `libgio-2.0.so.0`. GTK 3 uses `adw-gtk3` / `adw-gtk3-dark`; GTK 4 removes the managed Colloid injection and uses the native Adwaita base. Fonts, icon theme and cursor settings are preserved. Separate generated `shoji-colors.css` files are imported by `$XDG_CONFIG_HOME/gtk-3.0/gtk.css` and `gtk-4.0/gtk.css`. Only the final desktop theme/mode preference is set—there is no flip-to-light-and-back reload trick. Application-specific hardcoded colors and sandboxed applications are not guaranteed to follow; no Flatpak permissions are changed.
+- **Zen Browser** uses the install-default profile in `$XDG_CONFIG_HOME/zen/profiles.ini`, falling back to `~/.zen/profiles.ini`. Ambiguous defaults are reported rather than applying to every profile. Its `chrome/userChrome.css` imports `chrome/shoji-colors.css`, and a managed `user.js` directive enables user stylesheets. The palette and mode override workspace colors without deleting workspace settings. Websites, internal pages, `userContent.css` and Zen Mods' `zen-themes.css` are untouched.
+
+The shell updates as soon as a palette is accepted. GTK and Zen receive generated files, but running applications may not reload them. Restart them yourself when convenient; the shell never closes them. Preview mode never writes the palette cache or changes external application configuration, even when saved linking settings are enabled.
+
+### Turning linking off and resolving conflicts
+
+Turning a switch off restores the configuration still owned by the shell. Existing files and symbolic links are recorded before mutation; link targets are never overwritten. Unrelated additions to supported text configuration are retained. Later edits to a managed field or generated file cause a visible conflict instead of being overwritten.
+
+Recovery records are kept under `$XDG_STATE_HOME/shoji-bar-4/theme/`. Do not delete them while an integration is active or a recovery error is reported: they contain the originals needed for restoration. Resolve the reported conflicting managed field/file, then retry. Symlinked parent directories are rejected conservatively rather than followed.
+
+Removing a Zen `user.js` directive alone cannot undo a value already persisted by the browser. When necessary, disabling therefore leaves a tracked directive that restores the previous value at the next Zen start. The shell never writes `prefs.js`, including while Zen is running. If Zen's default profile changes, disable the old integration before enabling the new default.
+
 
 ## Configuring AI usage
 

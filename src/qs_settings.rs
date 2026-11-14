@@ -4,7 +4,7 @@
 use crate::qs_pages::header;
 use crate::quick_settings::{Page, open_at, section};
 use crate::settings::{BarPosition, Palette, ThemeMode, settings};
-use crate::theme::{SEEDS, TextStyle, colors, scheme_for, wallpaper_seed};
+use crate::theme::{SEEDS, TextStyle, colors, wallpaper_seed};
 use crate::ui::*;
 use anti_webui::prelude::*;
 use anti_webui_md3e::components::{
@@ -30,6 +30,7 @@ pub fn settings_page() -> Div {
                 ),
         )
         .child(settle_in(2, style_section()))
+        .child(theme_sync_section())
         .child(settle_in(3, bar_section()))
         .child(settle_in(4, clock_section()))
         .child(crate::ai_usage::preferences())
@@ -186,7 +187,10 @@ fn style_section() -> Div {
     for (seed, name) in SEEDS {
         swatches = swatches.child(swatch(Some(seed), name));
     }
-    let from_wallpaper = show(|| wallpaper_seed().is_some(), || swatch(None, "Wallpaper"));
+    let from_wallpaper = show(
+        || settings().with(|s| s.wallpaper.is_some()),
+        || swatch(None, "Wallpaper"),
+    );
     let chip = |p: Palette| {
         filter_chip(
             p.label(),
@@ -228,6 +232,97 @@ fn style_section() -> Div {
             move |i| settings().with(|s| s.mode == modes[i]),
             move |i| settings().update(|s| s.mode = modes[i]),
         ))
+        .child(
+            TextStyle::BODY_SMALL
+                .apply(div().child(text(|| {
+                    crate::theme::state()
+                        .status
+                        .with(|status| status.message.clone())
+                })))
+                .dyn_style(|s| s.text_color(colors().on_surface_variant)),
+        )
+        .child(show(
+            || {
+                crate::theme::state()
+                    .status
+                    .with(|status| status.error.is_some())
+            },
+            || {
+                TextStyle::BODY_SMALL
+                    .apply(div().child(text(|| {
+                        crate::theme::state()
+                            .status
+                            .with(|status| status.error.clone().unwrap_or_default())
+                    })))
+                    .dyn_style(|s| s.text_color(colors().error))
+            },
+        ))
+        .child(
+            styled_button(
+                "Retry theme",
+                ButtonStyle::tonal()
+                    .size(ButtonSize::ExtraSmall)
+                    .disabled_when(|| crate::theme::state().status.with(|status| status.busy)),
+            )
+            .on_click(|_| crate::theme::retry()),
+        )
+}
+
+fn theme_sync_section() -> Div {
+    let status = |gtk: bool| {
+        TextStyle::BODY_SMALL
+            .apply(div().child(text(move || {
+                crate::theme::state().status.with(|status| {
+                    let result = if gtk { &status.gtk } else { &status.zen };
+                    match result {
+                        Ok(message) | Err(message) => message.clone(),
+                    }
+                })
+            })))
+            .dyn_style(move |s| {
+                let error = crate::theme::state().status.with(|status| {
+                    if gtk {
+                        status.gtk.is_err()
+                    } else {
+                        status.zen.is_err()
+                    }
+                });
+                s.text_color(if error {
+                    colors().error
+                } else {
+                    colors().on_surface_variant
+                })
+            })
+    };
+    section()
+        .child(heading(icons::PALETTE, "Application colors"))
+        .child(
+            TextStyle::BODY_SMALL.apply(div().child(
+                "Link applications to this palette. Existing settings are saved for restoration; applications are never restarted.",
+            )).dyn_style(|s| s.text_color(colors().on_surface_variant)),
+        )
+        .child(setting_switch(
+            "GTK 3 / 4",
+            Binding::new(
+                || settings().with(|s| s.gtk_theme_enabled),
+                |enabled| settings().update(|s| s.gtk_theme_enabled = enabled),
+            ),
+        ))
+        .child(TextStyle::BODY_SMALL.apply(div().child(
+            "Uses the Adwaita base; GTK 3 needs adw-gtk-theme. Fonts, icons and cursor stay unchanged.",
+        )).dyn_style(|s| s.text_color(colors().on_surface_variant)))
+        .child(status(true))
+        .child(setting_switch(
+            "Zen Browser",
+            Binding::new(
+                || settings().with(|s| s.zen_theme_enabled),
+                |enabled| settings().update(|s| s.zen_theme_enabled = enabled),
+            ),
+        ))
+        .child(TextStyle::BODY_SMALL.apply(div().child(
+            "Default profile only. Overrides workspace colors, not websites. New colors apply after restarting Zen.",
+        )).dyn_style(|s| s.text_color(colors().on_surface_variant)))
+        .child(status(false))
 }
 
 /// The pictures to choose a wallpaper from. Choosing one takes the colors from it too.
@@ -290,8 +385,8 @@ fn wallpapers() -> Div {
     row
 }
 
-/// A seed as a circle of its primary color with its two other accents in the middle; the chosen
-/// one blooms into a cookie and shows a check. `None` is the wallpaper's.
+/// Seed inputs, not previews from a second color generator. The selected swatch
+/// uses the applied palette; `None` selects the wallpaper.
 fn swatch(seed: Option<u32>, name: &'static str) -> Div {
     let chosen = memo(move || {
         settings().with(|s| match seed {
@@ -304,11 +399,13 @@ fn swatch(seed: Option<u32>, name: &'static str) -> Div {
         move || if hovered.get() { 1.0 } else { 0.0 },
         fast_spatial(),
     );
-    let scheme = memo(move || {
-        let s = settings().get();
-        let seed = seed.or_else(wallpaper_seed).unwrap_or(s.seed);
-        scheme_for(seed, s.palette, crate::theme::is_dark())
-    });
+    let swatch_color = move || {
+        if chosen.get() {
+            colors().primary
+        } else {
+            rgb(seed.or_else(wallpaper_seed).unwrap_or(0x6750a4))
+        }
+    };
     let check = follow(
         move || if chosen.get() { 1.0 } else { 0.0 },
         default_effects(),
@@ -339,7 +436,7 @@ fn swatch(seed: Option<u32>, name: &'static str) -> Div {
                     }
                 },
                 ShapeStyle::new()
-                    .color(move |_| scheme.get().primary)
+                    .color(move |_| swatch_color())
                     .spring(fast_spatial())
                     .rotation(move || if chosen.get() { 40.0 } else { 0.0 }),
             )
@@ -357,29 +454,6 @@ fn swatch(seed: Option<u32>, name: &'static str) -> Div {
                 .pointer_events_none()
                 .child(
                     div()
-                        .size(14.0)
-                        .rounded(7.0_f32)
-                        .overflow_hidden()
-                        .flex()
-                        .flex_row()
-                        .dyn_style(move |s| {
-                            s.opacity(1.0 - check.get()).scale(1.0 - 0.5 * check.get())
-                        })
-                        .child(
-                            div()
-                                .w(7.0)
-                                .h_full()
-                                .dyn_style(move |s| s.bg(scheme.get().secondary_container)),
-                        )
-                        .child(
-                            div()
-                                .w(7.0)
-                                .h_full()
-                                .dyn_style(move |s| s.bg(scheme.get().tertiary)),
-                        ),
-                )
-                .child(
-                    div()
                         .absolute()
                         .inset(0.0)
                         .flex()
@@ -387,7 +461,7 @@ fn swatch(seed: Option<u32>, name: &'static str) -> Div {
                         .justify_center()
                         .dyn_style(move |s| {
                             let t = check.get();
-                            s.text_color(scheme.get().on_primary)
+                            s.text_color(colors().on_primary)
                                 .opacity(t)
                                 .scale(0.4 + 0.6 * t)
                         })

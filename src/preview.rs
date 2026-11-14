@@ -114,7 +114,7 @@ pub fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
             crate::settings::settings().update(|s| s.mode = crate::settings::ThemeMode::Light);
         }
         crate::settings::settings().update(|s| s.bar_position = bar_position);
-        crate::theme::install();
+        crate::theme::install(false);
         if args.iter().any(|a| a == "--ai-usage-demo") {
             ai_usage_demo();
         } else if matches!(part.as_str(), "bar" | "ai-usage") {
@@ -126,6 +126,20 @@ pub fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         let backdrop = div()
             .size_full()
             .bg(rgb(if light { 0xc8d0d8 } else { 0x30343a }));
+        if part == "settings" {
+            return backdrop.child(
+                div()
+                    .w(396.0)
+                    .h_full()
+                    .p(16.0_f32)
+                    .overflow_y_scroll()
+                    .dyn_style(|s| {
+                        let c = crate::theme::colors();
+                        s.bg(c.surface_container).text_color(c.on_surface)
+                    })
+                    .child(crate::qs_settings::settings_page()),
+            );
+        }
         let Some(output) = output else {
             return backdrop.child("no output");
         };

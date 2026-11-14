@@ -63,7 +63,7 @@ fn main() {
         .app_id("shoji-bar-4")
         .run(|| {
             ipc::serve();
-            theme::install();
+            theme::install(true);
             wm::share_theme();
             shell_layer::open_popups(shell_layer::Wayland);
             osd::install();

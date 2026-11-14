@@ -31,12 +31,15 @@ shoji-bar-4 preview bar left.png --bar-position left
 shoji-bar-4 preview quick-settings right.png --bar-position right --scale 1
 shoji-bar-4 preview ai-usage /tmp/ai-usage.png --ai-usage-demo --scale 1
 shoji-bar-4 preview bar /tmp/ai-bar.png --ai-usage-demo --bar-position left --scale 1
+shoji-bar-4 preview settings /tmp/settings-dark.png --width 420 --height 1400 --scale 1
+shoji-bar-4 preview settings /tmp/settings-light.png --width 420 --height 1400 --scale 1 --light
 ```
 
-- **Parts**: `bar`, `dock`, `workspaces`, `title`, `quick-settings`, `calendar`, `launcher`, `clipboard`, `media`, `ai-usage`, `power`, `overview`, `lock` and `notifications`.
+- **Parts**: `bar`, `dock`, `workspaces`, `title`, `quick-settings`, `settings`, `calendar`, `launcher`, `clipboard`, `media`, `ai-usage`, `power`, `overview`, `lock` and `notifications`.
   - In `lock`, the password is `shoji`, and PAM is not used.
   - `title` is the window island with a made-up window whose title goes between a long one and a short one every `--switch` ms (80 by default), from 1.2 s for a second and a half, and then stays on the one `--end` names (`long` or `short`). With `--windows`, the two titles belong to two windows that take the keyboard in turn. With `--spinner`, the title is a terminal's with a spinner in front, as Claude Code's is, which at the end changes to another title.
 - **Settings**: `preview` doesn't save them. `--bar-position top|left|right` selects the bar edge (top by default), including for panel and component previews. `--output NAME` selects the output instead of the first one.
+  - Theme previews run the real Matugen generator, but never save its cache or enable, update, or disable GTK/Zen linking.
 - **Real services**: the previews act on them.
   - A click on a network, Bluetooth or audio row really changes it.
   - `clipboard` previews use an isolated in-memory history: new copies arrive live, Enter changes the real clipboard, and Delete/pinning only affect the preview's history. They never open the persistent archive or access its encryption key.
@@ -103,6 +106,27 @@ cargo test --locked --bin shoji-bar-4 panels::tests
 ```
 
 Use the opt-in demo preview for visual checks in both themes and all bar placements, including the portrait output. Use the normal preview to exercise the installed CLI and public API; do not commit screenshots containing personal account data. The compact list inherits the shell's Material roles and type scale; no separate design tokens or web renderer are introduced.
+
+## Theme checks
+
+`src/theme/matugen.rs` owns isolated Matugen execution, strict palette/template validation and staged cache publication. `src/theme/runtime.rs` coalesces requests and accepts the generated palette and cache at the same request commit point. Owned subprocesses have cancellation, bounded output/deadlines and Linux parent-death protection. UI-shared request locks are released before cache directory synchronization.
+
+`src/theme/integrations/` owns reversible GTK and Zen configuration changes. Its tests use temporary directories and a simulated desktop-preference store, never the running desktop's settings or browser profiles. Coverage includes symlink preservation, unrelated edits, conflicts, rollback/recovery, install-default profile selection, and preference restoration.
+
+```sh
+cargo test --locked --bin shoji-bar-4 theme::
+```
+
+The installed-Matugen regression checks seed/image generation, all six variants in both modes, and quoted paths against the real configuration/template parser. It requires Matugen 4.2+ and writes only into temporary directories:
+
+```sh
+cargo test --locked --bin shoji-bar-4 installed_matugen -- --ignored
+```
+
+For manual desktop-preference probes, export temporary `HOME`/XDG roots **before** starting `dbus-run-session`; setting them only in its child leaves the activated dconf service outside that isolation.
+
+Use the settings preview in both modes for the real native surface. For generation-failure checks, use an isolated `XDG_STATE_HOME` containing a valid cache and a `PATH` without Matugen; a requested mode change must leave the cached colors applied and expose the error. Do not enable integrations against personal configuration just to exercise them. GTK CSS can be parsed with the installed GTK3/GTK4 `GtkCssProvider`; file generation alone is not evidence that a running application reloaded its theme.
+
 
 ## CPU reports
 

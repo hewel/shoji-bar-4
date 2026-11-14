@@ -1,16 +1,18 @@
-//! The color scheme, made from the settings and moved to smoothly when they change, and the few
-//! tokens of Material 3 that the components of `anti_webui_md3e` don't carry.
+//! Matugen is the dynamic palette authority. A single worker generates colors and
+//! updates opted-in applications; the UI keeps its last valid palette on failure.
 
-use crate::settings::{Palette, Settings, ThemeMode, settings};
+pub(crate) mod integrations;
+pub(crate) mod matugen;
+mod runtime;
+
+use crate::settings::{ThemeMode, settings};
 use anti_webui::prelude::*;
 use anti_webui::shell::prelude::*;
-use anti_webui_md3e::dynamic::seed_colors;
 use anti_webui_md3e::motion::default_effects;
-use anti_webui_md3e::{
-    ColorScheme, SchemeOptions, SchemeVariant, set_color_scheme, set_color_scheme_animated,
-};
-use std::cell::Cell;
-use std::path::Path;
+use anti_webui_md3e::{ColorScheme, set_color_scheme, set_color_scheme_animated};
+use std::cell::RefCell;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 pub use anti_webui_md3e::color_scheme as colors;
 pub use anti_webui_md3e::typography::TextStyle;
@@ -27,99 +29,193 @@ pub const SEEDS: [(u32, &str); 8] = [
     (0x5d5f73, "Slate"),
 ];
 
-fn variant(p: Palette) -> SchemeVariant {
-    match p {
-        Palette::TonalSpot => SchemeVariant::TonalSpot,
-        Palette::Vibrant => SchemeVariant::Vibrant,
-        Palette::Expressive => SchemeVariant::Expressive,
-        Palette::Fidelity => SchemeVariant::Fidelity,
-        Palette::Neutral => SchemeVariant::Neutral,
-        Palette::Monochrome => SchemeVariant::Monochrome,
+#[derive(Clone, Debug)]
+pub struct Status {
+    pub busy: bool,
+    pub message: String,
+    pub error: Option<String>,
+    pub gtk: Result<String, String>,
+    pub zen: Result<String, String>,
+}
+
+impl Default for Status {
+    fn default() -> Self {
+        Self {
+            busy: false,
+            message: "Matugen has not started".into(),
+            error: None,
+            gtk: Ok("Not linked".into()),
+            zen: Ok("Not linked".into()),
+        }
     }
 }
 
-/// The scheme made from a seed.
-pub fn scheme_for(seed: u32, palette: Palette, dark: bool) -> ColorScheme {
-    ColorScheme::from_seed_with(
-        rgb(seed),
-        SchemeOptions {
-            variant: variant(palette),
-            dark,
-            ..Default::default()
-        },
-    )
+#[derive(Clone, Copy)]
+pub struct State {
+    pub status: Signal<Status>,
+    /// The committed target, rather than an in-between animation frame.
+    pub applied: Signal<(ColorScheme, bool)>,
+    wallpaper: Signal<Option<(PathBuf, u32)>>,
+    retry: Signal<u64>,
 }
 
 thread_local! {
-    static DARK: Cell<Option<Memo<bool>>> = const { Cell::new(None) };
-    static WALLPAPER_SEED: Cell<Option<Signal<Option<u32>>>> = const { Cell::new(None) };
+    static STATE: State = create_root(|| State {
+        status: signal(Status::default()),
+        applied: signal((ColorScheme::dark(), true)),
+        wallpaper: signal(None),
+        retry: signal(0),
+    }).0;
+    static WORKER: RefCell<Option<runtime::Worker>> = const { RefCell::new(None) };
 }
 
-/// Whether the scheme is dark now.
+pub fn state() -> State {
+    STATE.with(|state| *state)
+}
+
+/// The effective mode stays with the last valid palette if generation fails.
 pub fn is_dark() -> bool {
-    DARK.with(|d| d.get()).is_some_and(|m| m.get())
+    state().applied.with(|(_, dark)| *dark)
 }
 
-/// The seed taken from the wallpaper, once it has been read.
 pub fn wallpaper_seed() -> Option<u32> {
-    WALLPAPER_SEED.with(|w| w.get()).and_then(|s| s.get())
+    let path = settings().with(|s| s.wallpaper.clone());
+    state().wallpaper.with(|seed| {
+        seed.as_ref()
+            .filter(|(source, _)| Some(source) == path.as_ref())
+            .map(|(_, color)| *color)
+    })
 }
 
-/// The seed in use: the one chosen, or the wallpaper's.
-pub fn current_seed(s: &Settings) -> u32 {
-    if s.seed_from_wallpaper {
-        wallpaper_seed().unwrap_or(s.seed)
-    } else {
-        s.seed
+pub fn retry() {
+    state()
+        .retry
+        .update(|revision| *revision = revision.wrapping_add(1));
+}
+
+/// Previews use the same generator, but never persist or link external themes.
+pub fn install(persistent: bool) {
+    if WORKER.with(|worker| worker.borrow().is_some()) {
+        return;
     }
-}
-
-/// Follows the settings, the time of day and the wallpaper. Call once, from the root.
-pub fn install() {
-    let dark = memo(move || match settings().with(|s| s.mode) {
+    let state = state();
+    let requested_dark = memo(move || match settings().with(|s| s.mode) {
         ThemeMode::Light => false,
         ThemeMode::Dark => true,
-        ThemeMode::Auto => {
-            let t = local_time(Every::Minute);
-            !(7..19).contains(&t.hour)
-        }
+        ThemeMode::Auto => !(7..19).contains(&local_time(Every::Minute).hour),
     });
-    DARK.with(|d| d.set(Some(dark)));
-    let wallpaper_seed = signal(None::<u32>);
-    WALLPAPER_SEED.with(|w| w.set(Some(wallpaper_seed)));
-
-    // Reads the wallpaper's colors off the UI thread whenever the wallpaper changes.
-    effect(move || {
-        let Some(path) = settings().with(|s| s.wallpaper.clone()) else {
-            wallpaper_seed.set(None);
-            return;
-        };
-        task(move || seed_of_image(&path)).then(move |seed| wallpaper_seed.set(seed));
+    let paths = integrations::Paths::from_environment();
+    let cached = paths.as_ref().map_err(Clone::clone).and_then(|paths| {
+        matugen::load_cache(&paths.state.join("shoji-bar-4/theme/last-good.json"))
     });
-
-    let first = Cell::new(true);
-    effect(move || {
-        let s = settings().get();
-        let scheme = scheme_for(current_seed(&s), s.palette, dark.get());
-        if first.replace(false) {
-            set_color_scheme(scheme);
+    let cache_error = cached.as_ref().err().cloned();
+    let cached = cached.ok().flatten().map(Arc::new);
+    let initial = cached
+        .as_ref()
+        .and_then(|theme| theme.scheme().ok().map(|scheme| (scheme, theme.dark)))
+        .unwrap_or_else(|| {
+            let dark = requested_dark.get();
+            (
+                if dark {
+                    ColorScheme::dark()
+                } else {
+                    ColorScheme::light()
+                },
+                dark,
+            )
+        });
+    state.applied.set(initial);
+    set_color_scheme(initial.0);
+    state.status.set(Status {
+        busy: true,
+        message: if cached.is_some() {
+            "Using saved colors · generating with Matugen"
         } else {
-            set_color_scheme_animated(scheme, default_effects());
+            "Using startup colors · generating with Matugen"
         }
+        .into(),
+        error: cache_error,
+        ..Status::default()
     });
-}
-
-/// The best seed in a picture, read from a small copy of it.
-fn seed_of_image(path: &Path) -> Option<u32> {
-    let small = anti_webui::core::images::decode_bitmap(path, (128, 128)).ok()?;
-    let mut pixels = Vec::new();
-    small.with_levels(|i, _, level| {
-        if i == 0 {
-            pixels = level.chunks_exact(4).map(|p| [p[0], p[1], p[2], p[3]]).collect();
+    let worker = runtime::Worker::start(paths, cached, persistent, move |outcome| {
+        if let Some(theme) = &outcome.theme {
+            // Both generated and cached palettes have already passed this validation.
+            if let Ok(scheme) = theme.scheme() {
+                let next = (scheme, theme.dark);
+                if state.applied.get_untracked() != next {
+                    state.applied.set(next);
+                    set_color_scheme_animated(scheme, default_effects());
+                }
+            }
+            if let Some(matugen::Request {
+                source: matugen::Source::Image(path),
+                ..
+            }) = &outcome.request
+            {
+                state
+                    .wallpaper
+                    .set(Some((path.clone(), theme.source_color)));
+            }
         }
+        state.status.set(Status {
+            busy: outcome.busy,
+            message: if outcome.busy {
+                "Updating application themes"
+            } else if outcome.error.is_some() {
+                "Theme update needs attention"
+            } else {
+                "Matugen colors applied"
+            }
+            .into(),
+            error: outcome.error,
+            gtk: outcome.integrations.gtk,
+            zen: outcome.integrations.zen,
+        });
     });
-    let seeds = seed_colors(pixels, 1);
-    seeds.first().map(|c| hex_of(*c))
+    match worker {
+        Ok(worker) => WORKER.with(|slot| *slot.borrow_mut() = Some(worker)),
+        Err(error) => {
+            state.status.update(|status| {
+                status.busy = false;
+                status.error = Some(error);
+            });
+            return;
+        }
+    }
+    let input = memo(move || {
+        settings().with(|s| runtime::Input {
+            request: matugen::Request {
+                source: if s.seed_from_wallpaper {
+                    s.wallpaper
+                        .clone()
+                        .map(matugen::Source::Image)
+                        .unwrap_or(matugen::Source::Color(s.seed))
+                } else {
+                    matugen::Source::Color(s.seed)
+                },
+                palette: s.palette,
+                dark: requested_dark.get(),
+            },
+            gtk: s.gtk_theme_enabled,
+            zen: s.zen_theme_enabled,
+            retry: state.retry.get(),
+        })
+    });
+    effect(move || {
+        let input = input.get();
+        state.status.update(|status| {
+            status.busy = true;
+            status.message = "Updating theme…".into();
+        });
+        WORKER.with(|worker| {
+            if let Some(worker) = worker.borrow().as_ref() {
+                worker.configure(input);
+            }
+        });
+    });
+    on_cleanup(|| {
+        WORKER.with(|worker| worker.borrow_mut().take());
+    });
 }
 
 /// The shadows of an elevation level of Material 3 (0 to 5): a key light and an ambient one.

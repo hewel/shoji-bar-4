@@ -8,12 +8,14 @@ A Material 3 Expressive desktop shell for [ShojiWM](https://github.com/bea4dev/S
 - **Dock** that hides at the bottom edge and rises when the pointer reaches it.
 - **Quick settings**, **calendar**, **launcher**, **clipboard history**, **media player**, **notifications**, **OSD** and a **lock screen**.
 - **AI usage**: remaining quotas and reset times for all accounts configured in `ai-usagebar`, with a compact bar indicator and optional Codex public reset information.
-- **Dynamic color** from a seed or the wallpaper, moved to on a spring everywhere at once, window frames included.
+- **Matugen dynamic color** from a seed or wallpaper, animated throughout the shell and shared with ShojiWM frames. Optional, reversible GTK 3/4 and Zen Browser palette linking.
 - Springs and shape morphs throughout, and no frames drawn while nothing moves (0% CPU when idle).
 
 ## Getting started
 
 You need ShojiWM, a Rust toolchain, and the usual desktop services: NetworkManager, BlueZ, PipeWire, UPower, power-profiles-daemon and logind. Clipboard capture is built in and requires the compositor's `ext-data-control-v1` or `wlr-data-control` protocol; an unlocked Secret Service keyring enables encrypted history across restarts. `zenity` lets you pick a user picture.
+
+Dynamic colors require [Matugen](https://github.com/InioX/matugen) 4.2 or newer on `PATH`. GTK linking additionally needs `adw-gtk-theme`, GSettings and the Gio library. Neither application linking nor dependency installation happens automatically; enable GTK and Zen separately in Settings. See [Matugen and application colors](docs/usage.md#matugen-and-application-colors).
 
 ```sh
 git clone https://github.com/bea4dev/shoji-bar-4 ~/.config/shoji-bar-4

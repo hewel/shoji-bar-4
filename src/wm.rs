@@ -7,8 +7,7 @@
 //! whenever the connection is made again: the socket is made anew when the config is reloaded.
 //! A config that doesn't know `theme.set` leaves it unanswered.
 
-use crate::settings::settings;
-use crate::theme::{current_seed, hex_of, is_dark, scheme_for};
+use crate::theme::{hex_of, state};
 use anti_webui::prelude::*;
 use anti_webui_md3e::ColorScheme;
 use std::io::{BufRead, BufReader, Write};
@@ -33,16 +32,18 @@ struct State {
     ended: u64,
 }
 
-static STATE: Mutex<State> = Mutex::new(State { latest: None, ended: 0 });
+static STATE: Mutex<State> = Mutex::new(State {
+    latest: None,
+    ended: 0,
+});
 static CHANGED: Condvar = Condvar::new();
 
 /// Sends the scheme whenever it changes, for as long as the shell runs. Call once, from the root,
 /// after [`crate::theme::install`].
 pub fn share_theme() {
     effect(move || {
-        let s = settings().get();
-        let scheme = scheme_for(current_seed(&s), s.palette, is_dark());
-        let message = theme_message(&scheme, is_dark());
+        let (scheme, dark) = state().applied.get();
+        let message = theme_message(&scheme, dark);
         STATE.lock().unwrap().latest = Some(message);
         CHANGED.notify_all();
     });
