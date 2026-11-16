@@ -21,6 +21,8 @@ mod ipc;
 mod launcher;
 mod lock;
 mod media_panel;
+mod nosleep;
+mod nosleep_service;
 mod notify;
 mod osd;
 mod overview;
@@ -69,6 +71,7 @@ fn main() {
             osd::install();
             lock::install();
             idle::install();
+            nosleep_service::install();
             clipboard_service::install(true);
             ai_usage_service::install();
             for_each_output(|output| {

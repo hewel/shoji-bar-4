@@ -25,6 +25,7 @@ pub(crate) enum Event {
     SystemSleep(bool),
     Caffeine(bool),
     MediaPlaying(bool),
+    AgentWorking(bool),
     Suspend,
     Cancel,
     LockTimeout(u64),
@@ -100,6 +101,8 @@ pub(crate) struct Output {
     pub caffeine: Option<bool>,
     pub inhibitors: Option<usize>,
     pub capability: Option<(bool, bool)>,
+    pub agents_working: Option<bool>,
+    pub agents_deferring: Option<bool>,
     pub hold: Option<bool>,
     pub warning: bool,
 }
@@ -127,6 +130,8 @@ pub(crate) struct Coordinator {
     system_sleeping: bool,
     caffeine: bool,
     media_playing: bool,
+    agents_working: bool,
+    agents_deferring: bool,
     inhibitors: usize,
 }
 
@@ -145,6 +150,8 @@ impl Coordinator {
             system_sleeping: false,
             caffeine: false,
             media_playing: false,
+            agents_working: false,
+            agents_deferring: false,
             inhibitors: 0,
         }
     }
@@ -218,6 +225,18 @@ impl Coordinator {
                 self.media_playing = playing;
                 self.policy
                     .inhibit(self.caffeine || playing || self.inhibitors > 0)
+            }
+            Event::AgentWorking(working) => {
+                self.agents_working = working;
+                output.agents_working = Some(working);
+                let watches = &self.watches;
+                self.policy.set_agents_working(working, |index, token| {
+                    watches
+                        .get(index)
+                        .and_then(Option::as_ref)
+                        .filter(|watch| watch.0 == token)
+                        .is_some_and(|watch| watch.1)
+                })
             }
             Event::Suspend => {
                 if !self.suspend_in_flight
@@ -293,6 +312,7 @@ impl Coordinator {
         };
         self.apply(effects, &mut output);
         self.prune_lock_waits(&mut output);
+        self.sync_deferral(&mut output);
         output.hold = Some(self.sleep_hold_wanted());
         output
     }
@@ -338,8 +358,17 @@ impl Coordinator {
             }
         }
         self.prune_lock_waits(&mut output);
+        self.sync_deferral(&mut output);
         output.hold = Some(self.sleep_hold_wanted());
         output
+    }
+
+    fn sync_deferral(&mut self, output: &mut Output) {
+        let deferring = self.policy.has_deferred();
+        if deferring != self.agents_deferring {
+            self.agents_deferring = deferring;
+            output.agents_deferring = Some(deferring);
+        }
     }
 
     #[cfg(test)]

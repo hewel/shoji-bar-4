@@ -39,11 +39,10 @@ impl<P: Platform> Runtime<P> {
             let idle = self.platform.idle_now(index, token);
             let refresh = self.coordinator.watch_state(index, token, true, idle);
             self.dispatch(refresh);
-        } else if let Event::Fade(_) = event {
-            self.platform
-                .refresh_activity(&mut self.coordinator, self.sender.clone());
-        }
-        if let Event::LockChanged = event {
+        } else if matches!(
+            event,
+            Event::Fade(_) | Event::LockChanged | Event::AgentWorking(false)
+        ) {
             self.platform
                 .refresh_activity(&mut self.coordinator, self.sender.clone());
         }
@@ -59,6 +58,8 @@ impl<P: Platform> Runtime<P> {
             caffeine,
             inhibitors,
             capability,
+            agents_working,
+            agents_deferring,
             hold,
             warning,
         } = output;
@@ -70,6 +71,12 @@ impl<P: Platform> Runtime<P> {
         }
         if let Some((sleep_delay, screensaver)) = capability {
             self.platform.capability(sleep_delay, screensaver);
+        }
+        if let Some(working) = agents_working {
+            self.platform.agents_working(working);
+        }
+        if let Some(deferring) = agents_deferring {
+            self.platform.agents_deferring(deferring);
         }
         let new_hold = match hold {
             Some(true) => self
@@ -186,6 +193,8 @@ pub(crate) trait Platform {
     fn caffeine(&mut self, enabled: bool);
     fn inhibitors(&mut self, count: usize);
     fn capability(&mut self, sleep_delay: bool, screensaver: bool);
+    fn agents_working(&mut self, working: bool);
+    fn agents_deferring(&mut self, deferring: bool);
     fn warning(&mut self, enabled: bool);
     fn error(&mut self, error: String);
     fn set_caffeine(&mut self, enabled: bool);
@@ -251,6 +260,12 @@ impl Platform for Desktop {
         let state = crate::idle::state();
         state.sleep_delay.set(sleep_delay);
         state.screensaver.set(screensaver);
+    }
+    fn agents_working(&mut self, working: bool) {
+        crate::idle::state().agents_working.set(working);
+    }
+    fn agents_deferring(&mut self, deferring: bool) {
+        crate::idle::state().agents_deferring.set(deferring);
     }
     fn warning(&mut self, enabled: bool) {
         crate::idle::state().warning.set(enabled);

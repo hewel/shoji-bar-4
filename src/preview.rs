@@ -51,7 +51,7 @@ pub fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         "dock" => (900.0, 136.0),
         "overview" => (1600.0, 1000.0),
         "launcher" | "quick-settings" | "calendar" | "clipboard" | "media" | "power" | "lock"
-        | "ai-usage" => (1600.0, 1000.0),
+        | "ai-usage" | "nosleep" => (1600.0, 1000.0),
         _ => (800.0, 600.0),
     };
     let lw: f32 = opt("--width")
@@ -99,6 +99,7 @@ pub fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         anti_webui::wgpu::wgpu::TextureFormat::Rgba8Unorm,
     );
     let available_outputs = outputs();
+    let has_real_output = !available_outputs.is_empty();
     let output = match opt("--output") {
         Some(name) => Some(
             available_outputs
@@ -106,8 +107,23 @@ pub fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
                 .find(|output| output.name == name)
                 .ok_or_else(|| format!("unknown output: {name}"))?,
         ),
-        None => available_outputs.into_iter().next(),
+        None => available_outputs.into_iter().next().or_else(|| {
+            let mut fallback = Output {
+                name: "Preview-1".into(),
+                ..Default::default()
+            };
+            fallback.logical_size.width = lw.round() as i32;
+            fallback.logical_size.height = lh.round() as i32;
+            Some(fallback)
+        }),
     };
+    let nosleep_demo = args
+        .iter()
+        .position(|a| a == "--nosleep-demo")
+        .map(|i| match args.get(i + 1).map(String::as_str) {
+            Some(mode) if !mode.starts_with("--") => mode.to_owned(),
+            _ => "both".to_owned(),
+        });
     crate::settings::never_save();
     let mut ui = Ui::new(move || {
         if light {
@@ -119,6 +135,11 @@ pub fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
             ai_usage_demo();
         } else if matches!(part.as_str(), "bar" | "ai-usage") {
             crate::ai_usage_service::install();
+        }
+        if let Some(mode) = &nosleep_demo {
+            nosleep_demo_state(mode);
+        } else if matches!(part.as_str(), "bar" | "nosleep") && has_real_output {
+            crate::nosleep_service::install();
         }
         if part == "clipboard" {
             crate::clipboard_service::install(false);
@@ -253,7 +274,7 @@ pub fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
             "idle-warning" => crate::idle::warning_view(2),
             "overview" => crate::panels::view(output, crate::panels::Panel::Overview),
             "launcher" | "quick-settings" | "calendar" | "clipboard" | "media" | "power"
-            | "ai-usage" => {
+            | "ai-usage" | "nosleep" => {
                 let panel = crate::panels::Panel::from_name(&part).unwrap();
                 crate::panels::view(output, panel)
             }
@@ -459,4 +480,53 @@ fn ai_usage_demo() {
         updated_at: Some(now),
         ..Job::default()
     });
+}
+
+/// Synthetic nosleep state for headless bar/panel previews without touching systemd.
+fn nosleep_demo_state(mode: &str) {
+    use crate::nosleep_service::{Snapshot, state};
+    crate::settings::settings().update(|s| s.nosleep_enabled = true);
+    let agents = vec![
+        "claude · Refactoring idle policy (Demo)".to_owned(),
+        "codex · Verifying bar layout (Demo)".to_owned(),
+    ];
+    let snapshot = match mode {
+        "off" => Snapshot {
+            watcher_loaded: true,
+            watcher_active: true,
+            ..Snapshot::default()
+        },
+        "manual" => Snapshot {
+            manual_active: true,
+            saved_profile: Some("balanced".to_owned()),
+            watcher_loaded: true,
+            watcher_active: true,
+            ..Snapshot::default()
+        },
+        "agents" => Snapshot {
+            auto_active: true,
+            watcher_loaded: true,
+            watcher_active: true,
+            lock_deferred: true,
+            agents,
+            ..Snapshot::default()
+        },
+        "error" => Snapshot {
+            watcher_loaded: true,
+            watcher_active: false,
+            error: Some("nosleep-agents.service is stopped (Demo)".to_owned()),
+            ..Snapshot::default()
+        },
+        _ => Snapshot {
+            manual_active: true,
+            saved_profile: Some("balanced".to_owned()),
+            auto_active: true,
+            watcher_loaded: true,
+            watcher_active: true,
+            lock_deferred: true,
+            agents,
+            ..Snapshot::default()
+        },
+    };
+    state().set(snapshot);
 }

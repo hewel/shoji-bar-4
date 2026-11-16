@@ -17,18 +17,20 @@ pub enum Panel {
     Clipboard,
     Media,
     AiUsage,
+    Nosleep,
     Power,
     Overview,
 }
 
 impl Panel {
-    pub(crate) const ALL: [Panel; 8] = [
+    pub(crate) const ALL: [Panel; 9] = [
         Self::QuickSettings,
         Self::Calendar,
         Self::Launcher,
         Self::Clipboard,
         Self::Media,
         Self::AiUsage,
+        Self::Nosleep,
         Self::Power,
         Self::Overview,
     ];
@@ -41,6 +43,7 @@ impl Panel {
             Self::Clipboard => "clipboard",
             Self::Media => "media",
             Self::AiUsage => "ai-usage",
+            Self::Nosleep => "nosleep",
             Self::Power => "power",
             Self::Overview => "overview",
         }
@@ -54,6 +57,7 @@ impl Panel {
         match self {
             Self::Launcher => settings().with(|s| s.launcher_enabled),
             Self::AiUsage => settings().with(|s| s.ai_usage.enabled),
+            Self::Nosleep => settings().with(|s| s.nosleep_enabled),
             _ => true,
         }
     }
@@ -100,11 +104,13 @@ fn state() -> Open {
             let (s, _) = create_root(|| {
                 let s = signal(None::<Invocation>);
                 effect(move || {
-                    let (launcher, ai_usage) =
-                        settings().with(|s| (s.launcher_enabled, s.ai_usage.enabled));
+                    let (launcher, ai_usage, nosleep) = settings().with(|s| {
+                        (s.launcher_enabled, s.ai_usage.enabled, s.nosleep_enabled)
+                    });
                     if s.get_untracked().is_some_and(|o| match o.panel {
                         Panel::Launcher => !launcher,
                         Panel::AiUsage => !ai_usage,
+                        Panel::Nosleep => !nosleep,
                         _ => false,
                     }) {
                         s.set(None);
@@ -225,7 +231,7 @@ fn place_panel(root: Div, panel: Panel, at: BarPlacement) -> Div {
             PanelSide::Right => root.items_end().justify_center().pr(clearance),
         },
         // Next to the bar's island of it, which supplies the other coordinate.
-        Panel::Media => match at.side() {
+        Panel::Media | Panel::Nosleep => match at.side() {
             PanelSide::Below => root.items_start().justify_start().pt(clearance),
             PanelSide::Left => root.items_start().justify_start().pl(clearance),
             PanelSide::Right => root.items_end().justify_start().pr(clearance),
@@ -274,6 +280,10 @@ pub(crate) fn surface_at(
         Panel::Media => {
             let anchor = untrack(|| invocation.get()).and_then(|i| i.anchor);
             crate::media_panel::panel(output.clone(), anchor, at)
+        }
+        Panel::Nosleep => {
+            let anchor = untrack(|| invocation.get()).and_then(|i| i.anchor);
+            crate::nosleep::panel(output.clone(), anchor, at)
         }
         Panel::Power => crate::power_dialog::panel(),
         Panel::Overview => crate::overview::panel(output.clone()),
@@ -370,7 +380,7 @@ mod tests {
     }
 
     #[test]
-    fn media_anchor_belongs_to_its_invocation() {
+    fn media_and_nosleep_anchors_belong_to_their_invocations() {
         close();
         let output = Output {
             name: "DP-1".to_owned(),
@@ -378,18 +388,21 @@ mod tests {
         };
         let anchor = AnchorPoint { x: 40.0, y: 320.0 };
         let ((), owner) = create_root(|| {
-            toggle_at(&output, Panel::Media, anchor);
-            let opened = invocation(&output, Panel::Media);
-            assert_eq!(opened.get().and_then(|i| i.anchor), Some(anchor));
+            for panel in [Panel::Media, Panel::Nosleep] {
+                toggle_at(&output, panel, anchor);
+                let opened = invocation(&output, panel);
+                assert_eq!(opened.get().and_then(|i| i.anchor), Some(anchor));
 
-            // An IPC opening on another output must not reuse the old island's coordinates.
-            open("DP-2", Panel::Media);
-            let other = Output {
-                name: "DP-2".to_owned(),
-                ..Default::default()
-            };
-            let opened = invocation(&other, Panel::Media);
-            assert_eq!(opened.get().and_then(|i| i.anchor), None);
+                // An IPC opening on another output must not reuse the old island's coordinates.
+                open("DP-2", panel);
+                let other = Output {
+                    name: "DP-2".to_owned(),
+                    ..Default::default()
+                };
+                let opened = invocation(&other, panel);
+                assert_eq!(opened.get().and_then(|i| i.anchor), None);
+                close();
+            }
         });
         owner.dispose();
         close();
@@ -402,13 +415,14 @@ mod tests {
             name: "DP-1".to_owned(),
             ..Default::default()
         };
-        for panel in [Panel::Launcher, Panel::AiUsage] {
+        for panel in [Panel::Launcher, Panel::AiUsage, Panel::Nosleep] {
             settings().set(crate::settings::Settings::default());
             close();
             let enable = |on| {
                 settings().update(|s| match panel {
                     Panel::Launcher => s.launcher_enabled = on,
                     Panel::AiUsage => s.ai_usage.enabled = on,
+                    Panel::Nosleep => s.nosleep_enabled = on,
                     _ => unreachable!(),
                 })
             };

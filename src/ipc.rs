@@ -9,7 +9,9 @@
 //! shoji-bar-4 msg toggle clipboard [OUTPUT]
 //! shoji-bar-4 msg toggle media [OUTPUT]
 //! shoji-bar-4 msg toggle ai-usage [OUTPUT]
+//! shoji-bar-4 msg toggle nosleep [OUTPUT]
 //! shoji-bar-4 msg ai-usage refresh
+//! shoji-bar-4 msg nosleep on|off|toggle|refresh|status
 //! shoji-bar-4 msg close
 //! shoji-bar-4 msg lock
 //! shoji-bar-4 msg theme dark|light|auto|toggle
@@ -206,6 +208,28 @@ fn run(line: &str, resolve_output: impl FnOnce() -> Option<String>) -> Result<St
             crate::ai_usage_service::refresh();
             Ok(String::new())
         }
+        ["nosleep", mode @ ("on" | "off" | "toggle")] => {
+            match *mode {
+                "on" => crate::nosleep_service::set_manual(true),
+                "off" => crate::nosleep_service::set_manual(false),
+                _ => crate::nosleep_service::toggle_manual(),
+            }
+            Ok(String::new())
+        }
+        ["nosleep", "refresh"] => {
+            crate::nosleep_service::refresh();
+            Ok(String::new())
+        }
+        ["nosleep", "status"] => {
+            let snap = crate::nosleep_service::state().get();
+            Ok(format!(
+                "manual={} auto={} watcher={} agents={}",
+                snap.manual_active,
+                snap.auto_active,
+                snap.watcher_active,
+                snap.agents.len()
+            ))
+        }
         ["caffeine", mode @ ("on" | "off" | "toggle")] => {
             let enabled = match *mode {
                 "on" => true,
@@ -353,5 +377,25 @@ mod tests {
             Err("no output".into()),
         );
         assert_eq!(panels::current(), None);
+    }
+
+    #[test]
+    fn nosleep_panel_and_status_ipc_respect_enabled_setting() {
+        crate::settings::never_save();
+        settings().set(crate::settings::Settings::default());
+        panels::close();
+        run("toggle nosleep", || Some("DP-1".into())).unwrap();
+        assert_eq!(panels::current(), Some(("DP-1".into(), Panel::Nosleep)));
+        run("toggle nosleep", || Some("DP-1".into())).unwrap();
+        assert_eq!(panels::current(), None);
+
+        let status = run("nosleep status", || None).unwrap();
+        assert!(status.contains("manual="));
+        assert!(status.contains("auto="));
+
+        settings().update(|s| s.nosleep_enabled = false);
+        assert!(run("toggle nosleep", || Some("DP-1".into())).is_err());
+        settings().set(crate::settings::Settings::default());
+        panels::close();
     }
 }

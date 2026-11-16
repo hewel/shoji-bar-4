@@ -149,6 +149,13 @@ fn bar_section() -> Div {
                 |on| settings().update(|s| s.dock_enabled = on),
             ),
         ))
+        .child(setting_switch(
+            "Nosleep",
+            Binding::new(
+                || settings().with(|s| s.nosleep_enabled),
+                |on| settings().update(|s| s.nosleep_enabled = on),
+            ),
+        ))
 }
 
 fn setting_switch(label: &'static str, on: Binding<bool>) -> Div {

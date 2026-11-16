@@ -15,6 +15,13 @@ pub enum IdleAction {
     Command,
 }
 
+impl IdleAction {
+    /// Automatic lock/suspend actions are postponed while Herdr agents work; screen-off stays active.
+    pub fn deferred_by_agents(self) -> bool {
+        matches!(self, Self::Lock | Self::Suspend | Self::LockAndSuspend)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct IdleBehavior {

@@ -30,12 +30,13 @@ shoji-bar-4 preview quick-settings out.png --click 1548,80 --click-frames 1 --ms
 shoji-bar-4 preview bar left.png --bar-position left
 shoji-bar-4 preview quick-settings right.png --bar-position right --scale 1
 shoji-bar-4 preview ai-usage /tmp/ai-usage.png --ai-usage-demo --scale 1
-shoji-bar-4 preview bar /tmp/ai-bar.png --ai-usage-demo --bar-position left --scale 1
+shoji-bar-4 preview bar /tmp/ai-bar.png --ai-usage-demo --nosleep-demo both --bar-position left --scale 1
+shoji-bar-4 preview nosleep /tmp/nosleep.png --nosleep-demo both --bar-position left --scale 1
 shoji-bar-4 preview settings /tmp/settings-dark.png --width 420 --height 1400 --scale 1
 shoji-bar-4 preview settings /tmp/settings-light.png --width 420 --height 1400 --scale 1 --light
 ```
 
-- **Parts**: `bar`, `dock`, `workspaces`, `title`, `quick-settings`, `settings`, `calendar`, `launcher`, `clipboard`, `media`, `ai-usage`, `power`, `overview`, `lock` and `notifications`.
+- **Parts**: `bar`, `dock`, `workspaces`, `title`, `quick-settings`, `settings`, `calendar`, `launcher`, `clipboard`, `media`, `ai-usage`, `nosleep`, `power`, `overview`, `lock` and `notifications`.
   - In `lock`, the password is `shoji`, and PAM is not used.
   - `title` is the window island with a made-up window whose title goes between a long one and a short one every `--switch` ms (80 by default), from 1.2 s for a second and a half, and then stays on the one `--end` names (`long` or `short`). With `--windows`, the two titles belong to two windows that take the keyboard in turn. With `--spinner`, the title is a terminal's with a spinner in front, as Claude Code's is, which at the end changes to another title.
 - **Settings**: `preview` doesn't save them. `--bar-position top|left|right` selects the bar edge (top by default), including for panel and component previews. `--output NAME` selects the output instead of the first one.

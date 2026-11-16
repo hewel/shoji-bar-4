@@ -15,6 +15,8 @@ enum Observation {
     Screen { id: Option<u64>, on: bool },
     Error(String),
     Caffeine(bool),
+    AgentsWorking(bool),
+    AgentsDeferring(bool),
 }
 
 #[derive(Default)]
@@ -44,6 +46,12 @@ impl Platform for Scenario {
     fn caffeine(&mut self, enabled: bool) { self.observations.push(Observation::Caffeine(enabled)); }
     fn inhibitors(&mut self, _count: usize) {}
     fn capability(&mut self, _sleep_delay: bool, _screensaver: bool) {}
+    fn agents_working(&mut self, working: bool) {
+        self.observations.push(Observation::AgentsWorking(working));
+    }
+    fn agents_deferring(&mut self, deferring: bool) {
+        self.observations.push(Observation::AgentsDeferring(deferring));
+    }
     fn warning(&mut self, enabled: bool) { self.observations.push(Observation::Warning(enabled)); }
     fn error(&mut self, error: String) { self.observations.push(Observation::Error(error)); }
     fn set_caffeine(&mut self, _enabled: bool) {}
@@ -321,4 +329,113 @@ fn warning_timer_activity_cancels_action_and_stale_deadline() {
     runtime.activity( index, watch_token, false);
     runtime.input(Event::Fade(2));
     assert_eq!(runtime.platform.observations.iter().filter(|observation| matches!(observation, Observation::Command { id: Some(_), .. })).count(), 1);
+}
+
+#[test]
+fn working_agents_defer_lock_and_suspend_while_allowing_screen_off() {
+    let (sender, _) = create_root(|| ui_channel(|_: Message| {}));
+    let mut runtime = Runtime::new(sender, Scenario::default());
+    runtime.input(Event::Configure(IdleConfig {
+        pre_action_fade_seconds: 0,
+        behaviors: vec![
+            IdleBehavior {
+                name: "screen-off".into(),
+                enabled: true,
+                timeout_seconds: 5,
+                action: IdleAction::ScreenOff,
+                ..IdleBehavior::default()
+            },
+            IdleBehavior {
+                name: "lock".into(),
+                enabled: true,
+                timeout_seconds: 10,
+                action: IdleAction::Lock,
+                ..IdleBehavior::default()
+            },
+            IdleBehavior {
+                name: "lock-and-suspend".into(),
+                enabled: true,
+                timeout_seconds: 15,
+                action: IdleAction::LockAndSuspend,
+                ..IdleBehavior::default()
+            },
+        ],
+    }));
+    let watches: Vec<(usize, u64)> = runtime
+        .platform
+        .observations
+        .iter()
+        .filter_map(|o| match o {
+            Observation::Watch { index, token, .. } => Some((*index, *token)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(watches.len(), 3);
+
+    runtime.input(Event::AgentWorking(true));
+    assert!(has(&runtime, Observation::AgentsWorking(true)));
+
+    runtime.activity(watches[0].0, watches[0].1, true);
+    assert!(runtime.platform.observations.iter().any(|o| matches!(o, Observation::Screen { on: false, .. })));
+
+    runtime.activity(watches[1].0, watches[1].1, true);
+    runtime.activity(watches[2].0, watches[2].1, true);
+    assert!(!has(&runtime, Observation::Lock));
+    assert!(!has(&runtime, Observation::Suspend));
+    assert!(has(&runtime, Observation::AgentsDeferring(true)));
+
+    // Manual Sleep still works while agents are working.
+    runtime.lock_changed(LockState::Locked);
+    runtime.input(Event::Suspend);
+    assert!(has(&runtime, Observation::Suspend));
+}
+
+#[test]
+fn deferred_lock_and_suspend_catch_up_when_still_idle_and_cancel_on_activity() {
+    // Part A: seat remains idle when agents finish -> catch up runs Lock & Suspend.
+    let (mut runtime, index, token) = scenario(IdleAction::LockAndSuspend, 0);
+    runtime.input(Event::AgentWorking(true));
+    runtime.activity(index, token, true);
+    assert!(!has(&runtime, Observation::Lock));
+    assert!(has(&runtime, Observation::AgentsDeferring(true)));
+
+    runtime.input(Event::AgentWorking(false));
+    assert!(has(&runtime, Observation::AgentsDeferring(false)));
+    assert!(has(&runtime, Observation::Lock));
+    runtime.lock_changed(LockState::Locked);
+    assert!(has(&runtime, Observation::Suspend));
+
+    // Part B: user activity occurs before agents finish -> deferral cancels without locking.
+    let (mut runtime, index, token) = scenario(IdleAction::LockAndSuspend, 0);
+    runtime.input(Event::AgentWorking(true));
+    runtime.activity(index, token, true);
+    assert!(has(&runtime, Observation::AgentsDeferring(true)));
+
+    runtime.activity(index, token, false);
+    assert!(has(&runtime, Observation::AgentsDeferring(false)));
+    runtime.platform.observations.clear();
+    runtime.input(Event::AgentWorking(false));
+    assert!(!has(&runtime, Observation::Lock));
+    assert!(!has(&runtime, Observation::Suspend));
+}
+
+#[test]
+fn working_agents_starting_during_fade_or_lock_wait_cancel_suspend() {
+    // During pre-action fade.
+    let (mut runtime, index, token) = scenario(IdleAction::LockAndSuspend, 2);
+    runtime.activity(index, token, true);
+    assert!(has(&runtime, Observation::Warning(true)));
+    runtime.input(Event::AgentWorking(true));
+    assert!(has(&runtime, Observation::AgentsDeferring(true)));
+    runtime.input(Event::Fade(2));
+    assert!(!has(&runtime, Observation::Lock));
+
+    // During lock wait before suspend.
+    let (mut runtime, index, token) = scenario(IdleAction::LockAndSuspend, 0);
+    runtime.activity(index, token, true);
+    assert!(has(&runtime, Observation::Lock));
+    runtime.input(Event::AgentWorking(true));
+    runtime.lock_changed(LockState::Locked);
+    assert!(!has(&runtime, Observation::Suspend));
+    assert!(runtime.sleep_hold.is_none());
 }

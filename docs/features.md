@@ -8,8 +8,9 @@ Floating islands along the top, left or right. **Settings → Desktop → Bar po
 - **Workspaces**: a marker that stretches as it moves, its leading edge on a fast spring and its trailing edge on a slow one. The mouse wheel switches workspaces too. When workspaces come and go, their places open and close and the island follows along the bar.
 - **Active window**: on the top bar, its icon and title. A new window, or a new title, comes up from below as the last one goes up, and the island follows its width on a spring, however fast they change. A title wider than the island for the moment fades out at its edge. A few characters changing in one place (a spinner like Claude Code's, a counter, a clock) change where they are, without the title coming up again. A vertical bar shows the application icon only.
 - **Clock**: the digits roll as they change, and hovering changes Roboto Flex's weight. A vertical bar stacks hours, minutes and optional seconds, with AM/PM for 12-hour time; the date stays on the top bar.
-- **Now playing** (a dancing equalizer): a click opens the player under the top bar or beside a vertical bar, a middle click pauses or plays. The vertical island omits the title.
+- **Nosleep**: shows manual sleep inhibition (`nosleep.service`) and automatic Herdr agent protection (`nosleep-agents.service`). Left-click toggles manual protection, right-click opens its anchored status card, and middle-click opens Idle settings.
 - **AI usage**: a compact remaining-percentage island; a click opens all accounts, a right click refreshes. Vertical bars stack the label and percentage.
+- **Now playing** (a dancing equalizer): a click opens the player under the top bar or beside a vertical bar, a middle click pauses or plays. The vertical island omits the title.
 - **Tray**, network, Bluetooth, volume and battery. Tray menus open beside a vertical bar. Tray icons are resolved from absolute files, application-provided icon directories or the desktop icon theme, with supplied pixmaps and title initials as fallbacks.
 
 ## Dock
@@ -39,10 +40,11 @@ The icon under the pointer lifts a little and shows its name.
 - **Settings page**, behind the gear (or the user picture):
   - **User picture**: a copy of the one you pick is kept in `$XDG_STATE_HOME/shoji-bar-4/`. Without one, `~/.face.icon`, `~/.face` or AccountsService's picture is used. Picking one needs zenity.
   - **Style and color**: wallpaper, seed color, scheme variant, and light, auto or dark.
-  - **Desktop**: bar position and independent **Launcher** and **Dock** switches, both on by default and applied immediately on every output.
+  - **Desktop**: bar position and independent **Launcher**, **Dock** and **Nosleep** switches, all on by default and applied immediately on every output.
     - Disabling Launcher hides its bar and dock buttons and closes it if open. IPC requests to open or toggle it return an error while disabled.
     - Disabling Dock hides it and removes its bottom-edge trigger and menu input. Re-enabling it restores the dock; pinned apps are kept.
-    - The switches persist as `launcher_enabled` and `dock_enabled` in `$XDG_STATE_HOME/shoji-bar-4/settings.json`. Older settings files keep both features enabled.
+    - Disabling Nosleep hides its bar island and closes its panel if open.
+    - The switches persist as `launcher_enabled`, `dock_enabled` and `nosleep_enabled` in `$XDG_STATE_HOME/shoji-bar-4/settings.json`. Older settings files keep these features enabled.
   - **Clock**: 24-hour time and seconds.
   - **Idle & sleep**: action switches and timeout summaries first; edit an action to change its timer. **More options** holds names, action types, locked-screen timing and resume commands. **Advanced** holds the warning duration, custom actions and service status. Edits take effect only after **Apply**.
   - **AI usage**: enable the collector, choose the bar's account, adjust refresh intervals and toggle countdowns or public reset information.
@@ -134,6 +136,7 @@ It covers every screen with `ext-session-lock`.
 - Activity restores screens turned off by Shoji and runs a completed rule's optional resume command once. Commands already admitted for execution are not killed by later cancellation.
 - **Caffeine**, a tile in Quick Settings, pauses local automatic actions and requests a logind idle/sleep inhibitor. Click the tile to toggle it; its On/Off label and active styling follow the other tiles. It is temporary, not persisted. **Idle & sleep → Advanced → Service status** reports when only local inhibition is available.
 - **Media playback** automatically pauses Shoji's idle actions while any MPRIS player reports Playing, even without an application inhibitor. Pausing, stopping or closing the last playing player restarts full countdowns unless Caffeine or another inhibitor is still active. This also pauses automatic locking and screen-off; manual Sleep and external sleep requests remain unchanged. Players without MPRIS must supply an inhibitor or use Caffeine.
+- **Working Herdr agents** (`nosleep-agents.service`, tracked via `$XDG_RUNTIME_DIR/nosleep-agents/working`) defer automatic **Lock**, **Suspend** and **Lock and suspend** rules while allowing **Screen off** and manual actions to proceed. Activity cancels deferred rules; when agents finish while the seat remains idle, deferred rules resume through the normal warning fade.
 - Compositor idle inhibitors are respected through `ext-idle-notify`. Applications can also use the `org.freedesktop.ScreenSaver` inhibition API; cookies belong to the calling connection and disappear when it disconnects. Shoji does not replace another owner of that bus name.
 - Manual **Sleep** and lock-required idle actions wait for the compositor to acknowledge the lock. Authentication cannot tear down that lock during the pending sleep transition; authenticate again after waking. Plain **Suspend** can explicitly opt out of locking.
 - External sleep requests use a logind delay inhibitor and release it only after lock acknowledgement. This is not a veto: logind may proceed at its configured maximum delay if locking fails. Missing protocol or D-Bus capabilities are reported in status; do not run a second idle daemon with competing policies.

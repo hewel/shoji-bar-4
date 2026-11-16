@@ -1,7 +1,7 @@
 //! The bar along an edge of every output: the launcher and the workspaces at the start, the window
-//! with the keyboard and the clock in the middle, and what is playing, the tray and the state of the
-//! system at the end. Each group floats in an island of its own, on a pane of frosted glass that is
-//! all of the bar. Vertical bars use compact icons and stack the clock.
+//! with the keyboard and the clock in the middle, and nosleep, AI usage, what is playing, the tray
+//! and the state of the system at the end. Each group floats in an island of its own, on a pane of
+//! frosted glass that is all of the bar. Vertical bars use compact icons and stack the clock.
 
 use crate::appinfo::{app_id_icon, tray_icon_file};
 use crate::panels::{Panel, is_open, toggle};
@@ -92,11 +92,15 @@ pub fn view(output: Output, at: BarPlacement) -> Div {
         .child(clock_island(output.clone(), at))
         .child(
             trailing
-                .child(media_island(output.clone(), at))
+                .child(show(|| settings().with(|s| s.nosleep_enabled), {
+                    let output = output.clone();
+                    move || crate::nosleep::island(output.clone(), at)
+                }))
                 .child(show(|| settings().with(|s| s.ai_usage.enabled), {
                     let output = output.clone();
                     move || crate::ai_usage::island(output.clone(), at)
                 }))
+                .child(media_island(output.clone(), at))
                 .child(tray_island(at))
                 .child(status_island(output, at)),
         )

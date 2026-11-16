@@ -4,6 +4,7 @@ use crate::idle_config::{IdleBehavior, IdleConfig};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Phase {
     Waiting,
+    Deferred,
     Fading,
     Running(u64),
     Applied,
@@ -51,6 +52,7 @@ pub(crate) struct Policy {
     locked: bool,
     inhibited: bool,
     sleeping: bool,
+    agents_working: bool,
     deferred_resume: Vec<IdleBehavior>,
 }
 
@@ -68,8 +70,13 @@ impl Policy {
             locked: false,
             inhibited: false,
             sleeping: false,
+            agents_working: false,
             deferred_resume: Vec::new(),
         }
+    }
+
+    pub fn has_deferred(&self) -> bool {
+        self.rules.iter().any(|r| r.phase == Phase::Deferred)
     }
 
     fn token(&mut self) -> u64 {
@@ -228,8 +235,17 @@ impl Policy {
         if rule.phase != Phase::Waiting {
             return effects;
         }
+        if self.agents_working && rule.behavior.action.deferred_by_agents() {
+            self.rules[index].phase = Phase::Deferred;
+            return effects;
+        }
+        self.trigger(index, &mut effects);
+        effects
+    }
+
+    fn trigger(&mut self, index: usize, effects: &mut Vec<Effect>) {
         if self.config.pre_action_fade_seconds == 0 {
-            self.run(index, &mut effects);
+            self.run(index, effects);
         } else {
             self.rules[index].phase = Phase::Fading;
             if self.fade.is_none() {
@@ -240,6 +256,59 @@ impl Policy {
                     seconds: self.config.pre_action_fade_seconds,
                 });
             }
+        }
+    }
+
+    pub fn set_agents_working(
+        &mut self,
+        working: bool,
+        mut still_idle: impl FnMut(usize, u64) -> bool,
+    ) -> Vec<Effect> {
+        if self.agents_working == working {
+            return Vec::new();
+        }
+        self.agents_working = working;
+        let mut effects = Vec::new();
+        if working {
+            for i in 0..self.rules.len() {
+                if !self.rules[i].behavior.action.deferred_by_agents() {
+                    continue;
+                }
+                match self.rules[i].phase {
+                    Phase::Fading => self.rules[i].phase = Phase::Deferred,
+                    Phase::Running(id) => {
+                        if let Some(p) = self.pending.iter_mut().find(|p| p.id == id) {
+                            p.cancelled = true;
+                        }
+                        self.rules[i].phase = Phase::Deferred;
+                    }
+                    _ => {}
+                }
+            }
+            if self.fade.is_some() && !self.rules.iter().any(|r| r.phase == Phase::Fading) {
+                self.hide_fade(&mut effects);
+            }
+            return effects;
+        }
+        if self.inhibited || self.sleeping {
+            for rule in &mut self.rules {
+                if rule.phase == Phase::Deferred {
+                    rule.phase = Phase::Waiting;
+                }
+            }
+            return effects;
+        }
+        for i in 0..self.rules.len() {
+            if self.rules[i].phase != Phase::Deferred {
+                continue;
+            }
+            let watch = self.rules[i].watch;
+            if !still_idle(i, watch) {
+                self.rules[i].phase = Phase::Waiting;
+                self.watch(i, &mut effects);
+                continue;
+            }
+            self.trigger(i, &mut effects);
         }
         effects
     }
@@ -264,7 +333,11 @@ impl Policy {
         self.hide_fade(&mut effects);
         for i in 0..self.rules.len() {
             if self.rules[i].phase == Phase::Fading {
-                self.run(i, &mut effects);
+                if self.agents_working && self.rules[i].behavior.action.deferred_by_agents() {
+                    self.rules[i].phase = Phase::Deferred;
+                } else {
+                    self.run(i, &mut effects);
+                }
             }
         }
         effects
@@ -508,5 +581,56 @@ mod tests {
                 .iter()
                 .any(|e| matches!(e, Effect::Watch { seconds: 10, .. }))
         );
+    }
+
+    #[test]
+    fn agents_working_defers_only_lock_and_suspend_and_catches_up_with_fade() {
+        let mut p = Policy::new();
+        let mut screen = IdleBehavior::default();
+        screen.name = "screen".into();
+        screen.enabled = true;
+        screen.timeout_seconds = 30;
+        screen.action = IdleAction::ScreenOff;
+
+        let mut lock = IdleBehavior::default();
+        lock.name = "lock".into();
+        lock.enabled = true;
+        lock.timeout_seconds = 60;
+        lock.action = IdleAction::Lock;
+
+        let effects = p.configure(IdleConfig {
+            pre_action_fade_seconds: 2,
+            behaviors: vec![screen, lock],
+        });
+        let tokens: Vec<u64> = effects
+            .iter()
+            .filter_map(|e| match e {
+                Effect::Watch { token, .. } => Some(*token),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(tokens.len(), 2);
+
+        assert!(p.set_agents_working(true, |_, _| true).is_empty());
+        // ScreenOff fades and runs while agents work.
+        let screen_effects = p.idle(0, tokens[0], true);
+        let fade = screen_effects
+            .iter()
+            .find_map(|e| match e {
+                Effect::Fade { token, .. } => Some(*token),
+                _ => None,
+            })
+            .unwrap();
+        assert!(p.idle(1, tokens[1], true).is_empty());
+        assert!(p.has_deferred());
+
+        let completed = p.fade_complete(fade);
+        assert!(completed.iter().any(|e| matches!(e, Effect::Run { .. })));
+        assert!(p.has_deferred());
+
+        // When agents stop and seat is still idle, deferred Lock enters Fade.
+        let catchup = p.set_agents_working(false, |_, _| true);
+        assert!(!p.has_deferred());
+        assert!(catchup.iter().any(|e| matches!(e, Effect::Fade { .. })));
     }
 }

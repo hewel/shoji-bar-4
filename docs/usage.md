@@ -52,7 +52,7 @@ The window frames can follow the shell's colors:
 - It sends its color scheme there as `theme.set` (`src/wm.rs`): on start, on reconnecting (including after a config reload), and whenever the scheme changes.
 - A config that doesn't handle `theme.set` ignores it.
 
-The layer namespaces are `shoji-bar-4-bar`, `-dock`, `-quick-settings`, `-calendar`, `-launcher`, `-overview`, `-clipboard`, `-media`, `-ai-usage`, `-notifications`, `-osd`, `-power`, `-wallpaper` and `-idle` (the warning fade). Use them to give layers ShojiWM effects such as blur.
+The layer namespaces are `shoji-bar-4-bar`, `-dock`, `-quick-settings`, `-calendar`, `-launcher`, `-overview`, `-clipboard`, `-media`, `-ai-usage`, `-nosleep`, `-notifications`, `-osd`, `-power`, `-wallpaper` and `-idle` (the warning fade). Use them to give layers ShojiWM effects such as blur.
 
 ## Commands
 
@@ -67,6 +67,8 @@ shoji-bar-4 msg toggle clipboard [OUTPUT]
 shoji-bar-4 msg toggle media [OUTPUT]
 shoji-bar-4 msg toggle ai-usage [OUTPUT]         # all configured AI accounts
 shoji-bar-4 msg ai-usage refresh                # respects retry backoff
+shoji-bar-4 msg toggle nosleep [OUTPUT]          # manual & agent sleep-guard status
+shoji-bar-4 msg nosleep on|off|toggle|refresh|status
 shoji-bar-4 msg close
 shoji-bar-4 msg lock                           # only the password unlocks
 shoji-bar-4 msg suspend                        # lock acknowledgement, then suspend
@@ -96,6 +98,7 @@ Settings are kept in `$XDG_STATE_HOME/shoji-bar-4/settings.json` (usually `~/.lo
 | `zen_theme_enabled` | Opt into reversible Zen Browser chrome palette linking; default `false` |
 | `pinned` | Desktop IDs of the apps pinned to the dock |
 | `bar_position` | `top` / `left` / `right`; changing it in Settings moves the bar immediately |
+| `nosleep_enabled` | Show the Nosleep island and panel (`true` by default) |
 | `clock_24h` / `clock_seconds` | How the clock is shown |
 | `idle` | Idle policy; all automatic actions disabled by default (see below) |
 | `ai_usage` | AI usage collector and bar options (see below) |

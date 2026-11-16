@@ -11,6 +11,8 @@ pub(crate) struct State {
     pub caffeine: Signal<bool>,
     pub inhibitors: Signal<usize>,
     pub media_playing: Signal<bool>,
+    pub agents_working: Signal<bool>,
+    pub agents_deferring: Signal<bool>,
     pub warning: Signal<bool>,
     pub error: Signal<String>,
     pub installed: Signal<bool>,
@@ -22,6 +24,8 @@ thread_local! {
     static STATE: State = create_root(|| State {
         caffeine: signal(false), inhibitors: signal(0), warning: signal(false),
         media_playing: signal(false),
+        agents_working: signal(false),
+        agents_deferring: signal(false),
         error: signal(String::new()), installed: signal(false),
         sleep_delay: signal(false), screensaver: signal(false),
     }).0;
@@ -52,6 +56,16 @@ pub fn set_caffeine(enabled: bool) {
     }
 }
 
+pub fn agents_deferring() -> bool {
+    state().agents_deferring.get()
+}
+
+pub fn set_agents_working(working: bool) {
+    if state().installed.get_untracked() {
+        send(Message::AgentWorking(working));
+    }
+}
+
 pub fn status_text() -> String {
     let s = state();
     if !s.installed.get() {
@@ -63,6 +77,10 @@ pub fn status_text() -> String {
         "Media playing · automatic idle actions paused".into()
     } else if s.inhibitors.get() > 0 {
         format!("Paused by {} application inhibitor(s)", s.inhibitors.get())
+    } else if s.agents_deferring.get() {
+        "Working agents · automatic lock and suspend deferred".into()
+    } else if s.agents_working.get() {
+        "Working agents · automatic lock and suspend paused (screen-off active)".into()
     } else if s.warning.get() {
         "Idle action pending · move the pointer or press a key to cancel".into()
     } else if crate::settings::settings().with(|s| s.idle.behaviors.iter().all(|b| !b.enabled)) {
